@@ -99,7 +99,7 @@ Add yourself as a row in the sheet (with your own phone number), upload it, and 
 1. ElevenLabs → Agents → **Phone Numbers** → import your Twilio number. Copy its ID to `ELEVENLABS_PHONE_NUMBER_ID`.
 2. Create an agent:
    - **System prompt**: paste [`prompts/sales-agent.md`](prompts/sales-agent.md). Its `{{variables}}` are filled per call automatically.
-   - **First message**: `Hi, this is {{agent_name}}, an AI assistant calling for {{your_name}} at {{your_company}} about the {{business_name}} website. Is this a good moment?`
+   - **First message**: `Hi, is this {{business_name}}?` (the prompt then has it introduce itself as an AI once they confirm).
    - **Voice**: pick one you like.
    - **Tools**: enable the system tool **End call**. Add two **Webhook** tools (POST, header `X-Tool-Secret: <TOOL_SECRET>`):
      - `send_demo_link` → `https://<domain>/tools/send-demo-link`. Body params: `lead_id` (dynamic variable `lead_id`), `email` (string, LLM), `contact_name` (string, LLM), `channel` (string, LLM: `email`/`sms`/`both`).

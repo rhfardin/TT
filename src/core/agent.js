@@ -30,10 +30,9 @@ export function renderPrompt(template, lead, seller) {
   return template.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? '') + extra;
 }
 
-export function firstGreeting(lead, seller) {
-  const who = lead.contact_name ? `Could I speak with ${lead.contact_name}?` : 'Am I speaking with the owner?';
-  return `Hi, this is ${seller.agentName}, an AI assistant calling for ${seller.yourName || 'the team'} at ` +
-    `${seller.company || 'our studio'} about the ${lead.business_name} website. ${who}`;
+// Used only if the person picks up and says nothing. Confirms the business first, like a person would.
+export function firstGreeting(lead) {
+  return `Hi, is this ${lead.business_name}?`;
 }
 
 export const REALTIME_TOOLS = [

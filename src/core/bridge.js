@@ -90,7 +90,9 @@ export class CallBridge {
           input: {
             format: { type: 'audio/pcmu' },
             transcription: { model: 'gpt-4o-mini-transcribe' },
-            turn_detection: { type: 'server_vad', silence_duration_ms: 500, create_response: true, interrupt_response: true },
+            // semantic_vad waits until the person has actually finished their thought, instead of
+            // jumping in after a fixed pause, which is a big part of sounding human.
+            turn_detection: { type: 'semantic_vad', eagerness: 'auto', create_response: true, interrupt_response: true },
           },
           output: { format: { type: 'audio/pcmu' }, voice },
         },
@@ -101,7 +103,7 @@ export class CallBridge {
     // People usually answer with "Hello?" first. If they stay silent, open the call ourselves.
     this.greetTimer = setTimeout(() => {
       if (!this.userSpoke) {
-        this.sendOpenAI({ type: 'response.create', response: { instructions: `Say exactly: "${firstGreeting(this.lead, this.config.seller)}"` } });
+        this.sendOpenAI({ type: 'response.create', response: { instructions: `Say, warmly and casually: "${firstGreeting(this.lead)}"` } });
       }
     }, 3500);
   }
