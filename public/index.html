@@ -6,100 +6,234 @@
 <title>AI Caller</title>
 <style>
   :root {
-    --bg: #f6f7f9; --panel: #fff; --text: #16181d; --muted: #667085; --line: #e4e7ec;
-    --accent: #3b5bdb; --accent-text: #fff; --good: #2b8a3e; --warn: #c77800; --bad: #c92a2a;
+    --bg: #f5f6f8; --panel: #fff; --text: #14161a; --muted: #6b7280; --line: #e5e7eb;
+    --accent: #2f54eb; --accent-text: #fff; --soft: #eef2ff;
+    --good: #15803d; --good-bg: #dcfce7; --warn: #b45309; --warn-bg: #fef3c7; --bad: #b91c1c; --bad-bg: #fee2e2;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #111317; --panel: #1a1d23; --text: #e9ebef; --muted: #98a2b3; --line: #2b2f37; --accent: #748ffc; --accent-text: #0b0d12; }
+    :root {
+      --bg: #0f1115; --panel: #171a20; --text: #e8eaee; --muted: #9aa3b2; --line: #272b33;
+      --accent: #7b93ff; --accent-text: #0b0d12; --soft: #1d2333;
+      --good: #4ade80; --good-bg: #12301f; --warn: #fbbf24; --warn-bg: #33270d; --bad: #f87171; --bad-bg: #3a1515;
+    }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
-  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
-  header h1 { font-size: 17px; margin: 0; flex: 1; }
-  main { padding: 16px 20px; max-width: 1400px; margin: 0 auto; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
-  button, .btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 7px; cursor: pointer; }
-  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-  button:disabled { opacity: .5; cursor: default; }
-  input, select, textarea { font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--text); }
-  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .muted { color: var(--muted); }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; border: 1px solid var(--line); white-space: nowrap; }
-  .pill.won, .pill.interested { color: var(--good); border-color: var(--good); }
-  .pill.callback, .pill.calling, .pill.queued { color: var(--warn); border-color: var(--warn); }
-  .pill.dnc, .pill.failed, .pill.not_interested { color: var(--bad); border-color: var(--bad); }
-  .ok { color: var(--good); } .no { color: var(--bad); }
-  .table-wrap { overflow-x: auto; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
-  tr.clickable:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); cursor: pointer; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  [hidden] { display: none !important; }
   a { color: var(--accent); }
-  .stats { display: flex; gap: 8px; flex-wrap: wrap; }
-  #drawer { position: fixed; inset: 0 0 0 auto; width: min(620px, 100%); background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 18px 20px; transform: translateX(100%); transition: transform .2s; box-shadow: -8px 0 30px rgba(0,0,0,.15); }
-  #drawer.open { transform: none; }
-  .bubble { padding: 7px 10px; border-radius: 9px; margin: 5px 0; max-width: 88%; }
-  .bubble.agent { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-  .bubble.user { background: color-mix(in srgb, var(--text) 7%, transparent); margin-left: auto; }
-  #login { max-width: 340px; margin: 12vh auto; }
-  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 8px; display: none; max-width: 90vw; }
-  dl { display: grid; grid-template-columns: 120px 1fr; gap: 4px 10px; margin: 0; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 8px 14px; border-radius: 8px; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button.small { padding: 5px 11px; font-size: 14px; }
+  button:disabled { opacity: .45; cursor: default; }
+  input, select { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); width: 100%; }
+  input[type=checkbox] { width: auto; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+  header { background: var(--panel); border-bottom: 1px solid var(--line); }
+  .bar { max-width: 1100px; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; gap: 6px; }
+  .logo { font-weight: 700; font-size: 17px; margin-right: 14px; white-space: nowrap; }
+  .tab { border: 0; background: none; padding: 8px 12px; color: var(--muted); }
+  .tab.active { color: var(--text); background: var(--soft); }
+  main { max-width: 1100px; margin: 0 auto; padding: 18px 16px 60px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+
+  .banner { background: var(--warn-bg); color: var(--warn); border: 0; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .banner b { color: var(--text); }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; text-align: left; }
+  .stat .n { font-size: 26px; font-weight: 700; line-height: 1.1; }
+  .stat .l { color: var(--muted); font-size: 14px; }
+  .stat.active { outline: 2px solid var(--accent); }
+
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .toolbar input[type=search] { max-width: 260px; }
+  .spacer { flex: 1; }
+  .queue { background: var(--soft); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; display: flex; gap: 10px; align-items: center; }
+
+  .list { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .item { display: grid; grid-template-columns: 28px 1.4fr 150px 120px 1.6fr 80px; gap: 12px; align-items: center; padding: 12px 14px; border-top: 1px solid var(--line); cursor: pointer; }
+  .item:first-child { border-top: 0; }
+  .item:hover { background: var(--soft); }
+  .item .name { font-weight: 600; }
+  .item .sub { color: var(--muted); font-size: 13px; }
+  .item .summary { color: var(--muted); font-size: 14px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .head { cursor: default; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 9px 14px; }
+  .head:hover { background: none; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 13px; background: var(--soft); white-space: nowrap; }
+  .pill.good { background: var(--good-bg); color: var(--good); }
+  .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .pill.bad { background: var(--bad-bg); color: var(--bad); }
+  .empty { text-align: center; padding: 50px 20px; }
+  .empty h2 { margin: 0 0 6px; }
+
+  #drawer { position: fixed; inset: 0 0 0 auto; width: min(560px, 100%); background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 20px; transform: translateX(100%); transition: transform .2s; z-index: 5; visibility: hidden; }
+  #drawer.open { transform: none; visibility: visible; box-shadow: -10px 0 30px rgba(0,0,0,.15); }
+  dl { display: grid; grid-template-columns: 110px 1fr; gap: 6px 12px; margin: 14px 0; }
   dt { color: var(--muted); } dd { margin: 0; word-break: break-word; }
-  @media (max-width: 700px) { .hide-sm { display: none; } main { padding: 12px; } }
+  .bubble { padding: 8px 11px; border-radius: 10px; margin: 6px 0; max-width: 88%; }
+  .bubble.agent { background: var(--soft); }
+  .bubble.user { background: var(--bg); margin-left: auto; border: 1px solid var(--line); }
+
+  .settings { max-width: 720px; }
+  .settings h2 { margin: 0 0 4px; font-size: 17px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-top: 12px; }
+  .grid .full { grid-column: 1 / -1; }
+  label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .help { font-size: 13px; color: var(--muted); margin-top: 3px; font-weight: 400; }
+  .days { display: flex; gap: 6px; flex-wrap: wrap; }
+  .days label { font-weight: 400; display: flex; gap: 4px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; margin: 0; }
+  .savebar { position: sticky; bottom: 0; background: var(--bg); padding: 12px 0; display: flex; gap: 10px; align-items: center; }
+
+  #login { max-width: 360px; margin: 14vh auto; }
+  #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 10px; display: none; max-width: 90vw; z-index: 10; }
+
+  @media (max-width: 760px) {
+    .logo { margin-right: 4px; } .tab { padding: 8px; } #logout { white-space: nowrap; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .item { grid-template-columns: 28px 1fr auto; }
+    .item .c-phone, .item .c-summary, .head .c-phone, .head .c-summary, .head .c-status { display: none; }
+    .item .c-status { grid-column: 2; }
+    .grid { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
+
 <div id="login" class="card" hidden>
   <h2 style="margin-top:0">AI Caller</h2>
-  <form id="loginForm" class="row">
-    <input type="password" id="password" placeholder="Password" style="flex:1" autofocus>
-    <button class="primary">Log in</button>
+  <form id="loginForm">
+    <label for="password">Password</label>
+    <div class="row" style="flex-wrap:nowrap"><input type="password" id="password" autofocus><button class="primary">Log in</button></div>
   </form>
-  <p id="loginErr" class="no"></p>
+  <p id="loginErr" style="color:var(--bad)"></p>
 </div>
 
 <div id="app" hidden>
-  <header>
-    <h1>AI Caller</h1>
-    <span id="providerInfo" class="muted"></span>
-    <button id="logout">Log out</button>
-  </header>
+  <header><div class="bar">
+    <span class="logo">AI Caller</span>
+    <button class="tab active" data-tab="leads">Businesses</button>
+    <button class="tab" data-tab="settings">Settings</button>
+    <span class="spacer"></span>
+    <button class="small" id="logout">Log out</button>
+  </div></header>
+
   <main>
-    <div class="card" id="setup"></div>
-
-    <div class="card">
-      <div class="row">
-        <strong>Import businesses</strong>
-        <input type="file" id="file" accept=".xlsx,.xls,.csv">
-        <button id="uploadBtn" class="primary">Upload sheet</button>
-        <span id="importResult" class="muted"></span>
+    <!-- ===== Businesses ===== -->
+    <section id="tab-leads">
+      <div class="card banner" id="setupBanner" hidden>
+        <span><b>Almost ready.</b> <span id="setupText"></span></span>
+        <button class="small primary" data-goto="settings">Open Settings</button>
       </div>
-      <p class="muted" style="margin:8px 0 0">First row must be headers. Recognized: business name, phone, owner/contact, email, website, redesign/demo link, category, city, timezone, notes. Re-uploading updates existing rows by phone number.</p>
-    </div>
 
-    <div class="card">
-      <div class="row" style="margin-bottom:10px">
-        <input id="q" placeholder="Search name, phone, city" style="min-width:200px">
-        <select id="statusFilter"><option value="">All statuses</option></select>
-        <select id="categoryFilter"><option value="">All categories</option></select>
-        <span style="flex:1"></span>
-        <label class="row" style="gap:5px"><input type="checkbox" id="ignoreWindow"> Ignore calling hours</label>
-        <button id="callSelected" class="primary" disabled>Call selected (0)</button>
-        <button id="clearQueue">Stop queue</button>
-      </div>
       <div class="stats" id="stats"></div>
-      <div id="queueInfo" class="muted" style="margin-top:6px"></div>
-      <div class="table-wrap" style="margin-top:10px">
-        <table>
-          <thead><tr>
-            <th><input type="checkbox" id="selectAll"></th>
-            <th>Business</th><th class="hide-sm">Category</th><th>Phone</th><th>Status</th>
-            <th class="hide-sm">Tries</th><th class="hide-sm">Last result</th><th></th>
-          </tr></thead>
-          <tbody id="rows"></tbody>
-        </table>
+
+      <div class="queue" id="queueBar" hidden>
+        <span id="queueText"></span><span class="spacer"></span>
+        <button class="small" id="stopQueue">Stop</button>
       </div>
-    </div>
+
+      <div class="toolbar">
+        <button class="primary" id="uploadBtn">Upload Excel sheet</button>
+        <input type="file" id="file" accept=".xlsx,.xls,.csv" hidden>
+        <input type="search" id="q" placeholder="Search businesses">
+        <span class="spacer"></span>
+        <button id="callSelected" disabled>Call selected</button>
+      </div>
+
+      <div class="list" id="list"></div>
+    </section>
+
+    <!-- ===== Settings ===== -->
+    <section id="tab-settings" class="settings" hidden>
+      <div class="card">
+        <h2>Test call</h2>
+        <p class="muted" style="margin:0">Call your own phone to hear the AI pitch a pretend business. Works any time of day.</p>
+        <div class="grid">
+          <div><label>Your phone number</label><input id="testPhone" placeholder="+1 555 123 4567"></div>
+          <div><label>Pretend business name</label><input id="testBusiness" placeholder="Bright Smile Dental"></div>
+        </div>
+        <div class="row" style="margin-top:12px"><button class="primary" id="testCall">Call me now</button><span id="testResult" class="muted"></span></div>
+      </div>
+
+      <form id="settingsForm">
+        <div class="card">
+          <h2>1. Phone and AI voice</h2>
+          <p class="muted" style="margin:0">Required. These are kept on your server and never shown again after saving.</p>
+          <div class="grid">
+            <div class="full"><label>OpenAI API key</label><input name="OPENAI_API_KEY" type="password" autocomplete="off">
+              <div class="help">platform.openai.com → API keys. Add at least $5 credit.</div></div>
+            <div><label>Twilio Account SID</label><input name="TWILIO_ACCOUNT_SID" autocomplete="off" placeholder="AC…">
+              <div class="help">twilio.com console home page</div></div>
+            <div><label>Twilio Auth Token</label><input name="TWILIO_AUTH_TOKEN" type="password" autocomplete="off"></div>
+            <div><label>Twilio phone number</label><input name="TWILIO_FROM_NUMBER" placeholder="+15551234567">
+              <div class="help">The number the calls come from</div></div>
+            <div><label>Voice quality</label>
+              <select name="OPENAI_REALTIME_MODEL">
+                <option value="gpt-realtime-mini">Standard (about $5 per 100 calls)</option>
+                <option value="gpt-realtime">Best (about $10 per 100 calls)</option>
+              </select></div>
+            <div><label>Voice</label>
+              <select name="OPENAI_VOICE">
+                <option value="marin">Marin (female, most natural)</option>
+                <option value="cedar">Cedar (male, most natural)</option>
+                <option value="coral">Coral (female, warm)</option>
+                <option value="ash">Ash (male, clear)</option>
+                <option value="sage">Sage (female, calm)</option>
+                <option value="verse">Verse (male, expressive)</option>
+                <option value="shimmer">Shimmer (female, bright)</option>
+                <option value="alloy">Alloy (neutral)</option>
+              </select></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>2. About you</h2>
+          <p class="muted" style="margin:0">What the AI says about who it's calling for.</p>
+          <div class="grid">
+            <div><label>AI's name</label><input name="AGENT_NAME" placeholder="Alex"></div>
+            <div><label>Your name</label><input name="YOUR_NAME"></div>
+            <div><label>Company name</label><input name="YOUR_COMPANY"></div>
+            <div><label>Price</label><input name="OFFER_PRICE" placeholder="$499 one-time, then $49/month">
+              <div class="help">Leave empty and the AI won't quote a price</div></div>
+            <div><label>Booking link</label><input name="BOOKING_LINK" placeholder="https://calendly.com/…"></div>
+            <div><label>Payment link</label><input name="PAYMENT_LINK" placeholder="https://buy.stripe.com/…"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>3. Follow-up email</h2>
+          <p class="muted" style="margin:0">The AI emails the redesign link during the call. Free with <a href="https://resend.com" target="_blank" rel="noopener">Resend</a> (verify your domain there).</p>
+          <div class="grid">
+            <div><label>Resend API key</label><input name="RESEND_API_KEY" type="password" autocomplete="off" placeholder="re_…"></div>
+            <div><label>Send from</label><input name="EMAIL_FROM" placeholder="Your Name <you@yourdomain.com>"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>4. When to call</h2>
+          <div class="grid">
+            <div><label>Start hour</label><select name="CALL_WINDOW_START"></select></div>
+            <div><label>End hour</label><select name="CALL_WINDOW_END"></select></div>
+            <div class="full"><label>Days</label><div class="days" id="days"></div></div>
+            <div><label>Default timezone</label>
+              <select name="DEFAULT_TIMEZONE">
+                <option>America/New_York</option><option>America/Chicago</option><option>America/Denver</option>
+                <option>America/Phoenix</option><option>America/Los_Angeles</option><option>America/Anchorage</option>
+                <option>Pacific/Honolulu</option><option>Europe/London</option><option>Australia/Sydney</option>
+              </select>
+              <div class="help">Used when a business has no timezone in the sheet</div></div>
+            <div><label>Country code</label><input name="DEFAULT_COUNTRY_CODE" placeholder="1">
+              <div class="help">Added to numbers without one (1 = US/Canada)</div></div>
+            <div><label>Seconds between calls</label><input name="CALL_SPACING_SECONDS" type="number" min="10"></div>
+            <div><label>Max tries per business</label><input name="MAX_ATTEMPTS" type="number" min="1"></div>
+          </div>
+        </div>
+
+        <div class="savebar"><button class="primary">Save settings</button><span id="saveResult" class="muted"></span></div>
+      </form>
+    </section>
   </main>
 </div>
 
@@ -108,122 +242,173 @@
 
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script>
-const STATUSES = ['new','queued','calling','no_answer','voicemail','callback','interested','won','not_interested','completed','failed','dnc'];
 const $ = (s) => document.querySelector(s);
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const selected = new Set();
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// Plain-language names and colors for each status.
+const STATUS = {
+  new: ['Not called', ''], queued: ['Waiting', 'warn'], calling: ['Calling now', 'warn'],
+  no_answer: ['No answer', ''], voicemail: ['Voicemail', ''], callback: ['Call back', 'warn'],
+  interested: ['Interested', 'good'], won: ['Won', 'good'], completed: ['Talked', ''],
+  not_interested: ['Not interested', 'bad'], failed: ['Call failed', 'bad'], dnc: ['Do not call', 'bad'],
+};
+const GROUPS = [
+  { key: 'todo', label: 'To call', statuses: ['new', 'no_answer', 'voicemail', 'callback', 'queued', 'calling', 'failed'] },
+  { key: 'interested', label: 'Interested', statuses: ['interested'] },
+  { key: 'won', label: 'Won', statuses: ['won'] },
+  { key: 'all', label: 'All businesses', statuses: [] },
+];
+let group = 'all';
 let leads = [];
+const selected = new Set();
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: opts.body ? { 'Content-Type': 'application/json' } : {}, ...opts });
-  if (res.status === 401 && path !== '/api/login') { showLogin(); throw new Error('login required'); }
+  if (res.status === 401 && path !== '/api/login') { showLogin(); throw new Error('Please log in'); }
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  if (!res.ok) throw new Error(body.error || `Something went wrong (${res.status})`);
   return body;
 }
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
-  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 4500);
+  clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = 'none'), 5000);
 }
-function showLogin() { $('#login').hidden = false; $('#app').hidden = true; }
+const pill = (s) => { const [label, cls] = STATUS[s] || [s, '']; return `<span class="pill ${cls}">${esc(label)}</span>`; };
 
+// ---------- Login ----------
+function showLogin() { $('#login').hidden = false; $('#app').hidden = true; }
 $('#loginForm').onsubmit = async (e) => {
   e.preventDefault();
-  try {
-    await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('#password').value }) });
-    start();
-  } catch (err) { $('#loginErr').textContent = err.message; }
+  try { await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('#password').value }) }); start(); }
+  catch (err) { $('#loginErr').textContent = err.message; }
 };
 $('#logout').onclick = async () => { await api('/api/logout', { method: 'POST' }); showLogin(); };
 
-for (const s of STATUSES) $('#statusFilter').insertAdjacentHTML('beforeend', `<option>${s}</option>`);
+// ---------- Tabs ----------
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+  $('#tab-leads').hidden = name !== 'leads';
+  $('#tab-settings').hidden = name !== 'settings';
+  if (name === 'settings') loadSettings();
+}
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-tab],[data-goto]');
+  if (t) showTab(t.dataset.tab || t.dataset.goto);
+});
 
+// ---------- Businesses ----------
 async function loadStatus() {
   const s = await api('/api/status');
-  const c = s.configured;
-  const mark = (b) => b ? '<span class="ok">✓</span>' : '<span class="no">✗</span>';
-  $('#providerInfo').textContent = `Voice: ${s.provider === 'elevenlabs' ? 'ElevenLabs' : 'OpenAI Realtime'}`;
-  const voiceOk = s.provider === 'elevenlabs' ? c.elevenlabs : c.openai;
-  const lines = [
-    `${mark(voiceOk)} Calling (${s.provider})${s.providerProblem ? ` <span class="muted">${esc(s.providerProblem)}</span>` : ''}`,
-    s.provider === 'elevenlabs' ? `${mark(c.webhookSecret)} Webhook secret` : '',
-    `${mark(c.email)} Email follow-up`,
-    `${mark(c.sms)} SMS`,
-    `Calling hours: ${s.calling.windowStartHour}:00–${s.calling.windowEndHour}:00 (lead's timezone, default ${s.calling.defaultTimezone}) · ${s.calling.spacingSeconds}s between queued calls · max ${s.calling.maxAttempts} tries`,
-  ].filter(Boolean);
-  let extra = '';
-  if (s.provider === 'elevenlabs') {
-    extra = `<div class="muted" style="margin-top:6px">ElevenLabs post-call webhook: <code>${esc(s.webhookUrl)}</code> · tools: <code>${esc(s.toolUrls.sendDemoLink)}</code>, <code>${esc(s.toolUrls.doNotCall)}</code></div>`;
-  }
-  $('#setup').innerHTML = `<div class="row">${lines.map((l) => `<span>${l}</span>`).join('<span class="muted">·</span>')}</div>${extra}`;
-  $('#stats').innerHTML = s.counts.map((r) => `<span class="pill ${r.status}">${r.status}: ${r.n}</span>`).join('');
+  const n = Object.fromEntries(s.counts.map((r) => [r.status, r.n]));
+  const sum = (list) => list.reduce((a, k) => a + (n[k] || 0), 0);
+  const total = s.counts.reduce((a, r) => a + r.n, 0);
+  $('#stats').innerHTML = GROUPS.map((g) => `
+    <button class="stat ${g.key === group ? 'active' : ''}" data-group="${g.key}">
+      <div class="n">${g.statuses.length ? sum(g.statuses) : total}</div><div class="l">${g.label}</div>
+    </button>`).join('');
+
+  $('#setupBanner').hidden = !s.providerProblem;
+  if (s.providerProblem) $('#setupText').textContent = 'Add your OpenAI key and Twilio details in Settings to start calling.';
+
   const q = s.queue;
-  $('#queueInfo').textContent = q.pending.length || q.running ? `Queue: ${q.pending.length} waiting${q.running ? ', calling now' : ''}` : '';
+  $('#queueBar').hidden = !q.pending.length;
+  $('#queueText').textContent = `Calling your list: ${q.pending.length} waiting. Calls go out one at a time.`;
 }
+$('#stats').onclick = (e) => {
+  const b = e.target.closest('[data-group]');
+  if (!b) return;
+  group = b.dataset.group;
+  refresh();
+};
 
 async function loadLeads() {
-  const params = new URLSearchParams({ q: $('#q').value, status: $('#statusFilter').value, category: $('#categoryFilter').value });
-  const data = await api('/api/leads?' + params);
-  leads = data.leads;
-  const cat = $('#categoryFilter'), cur = cat.value;
-  cat.innerHTML = '<option value="">All categories</option>' + data.categories.map((c) => `<option ${c === cur ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  const g = GROUPS.find((x) => x.key === group);
+  const params = new URLSearchParams({ q: $('#q').value, status: g.statuses.join(',') });
+  leads = (await api('/api/leads?' + params)).leads;
   render();
 }
 
 function render() {
-  $('#rows').innerHTML = leads.map((l) => `
-    <tr class="clickable" data-id="${l.id}">
-      <td><input type="checkbox" class="sel" data-id="${l.id}" ${selected.has(l.id) ? 'checked' : ''}></td>
-      <td><strong>${esc(l.business_name)}</strong>${l.contact_name ? `<div class="muted">${esc(l.contact_name)}</div>` : ''}</td>
-      <td class="hide-sm">${esc(l.category)}</td>
-      <td>${esc(l.phone)}${l.callable_now.ok ? '' : `<div class="muted" title="${esc(l.callable_now.reason)}">outside hours</div>`}</td>
-      <td><span class="pill ${l.status}">${l.status}</span></td>
-      <td class="hide-sm">${l.attempts}</td>
-      <td class="hide-sm muted" style="max-width:320px">${esc((l.last_summary || '').slice(0, 140))}</td>
-      <td><button data-call="${l.id}">Call</button></td>
-    </tr>`).join('') || '<tr><td colspan="8" class="muted">No businesses yet. Upload your sheet above.</td></tr>';
-  $('#callSelected').textContent = `Call selected (${selected.size})`;
+  if (!leads.length) {
+    $('#list').innerHTML = $('#q').value || group !== 'all'
+      ? '<div class="empty muted">Nothing here.</div>'
+      : `<div class="empty"><h2>Upload your Excel sheet to start</h2>
+           <p class="muted">One business per row. The first row should have headers like<br>
+           <b>Business Name, Phone, Owner, Email, Website, Redesign Link, Category, City, Notes</b>.</p>
+           <button class="primary" onclick="$('#file').click()">Upload Excel sheet</button></div>`;
+  } else {
+    $('#list').innerHTML = `
+      <div class="item head"><input type="checkbox" id="selectAll" ${leads.every((l) => selected.has(l.id)) ? 'checked' : ''}>
+        <span>Business</span><span class="c-phone">Phone</span><span class="c-status">Status</span><span class="c-summary">Last call</span><span></span></div>` +
+      leads.map((l) => `
+      <div class="item" data-id="${l.id}">
+        <input type="checkbox" class="sel" data-id="${l.id}" ${selected.has(l.id) ? 'checked' : ''}>
+        <div><div class="name">${esc(l.business_name)}</div><div class="sub">${esc([l.category, l.city].filter(Boolean).join(' · '))}</div></div>
+        <div class="c-phone">${esc(l.phone)}</div>
+        <div class="c-status">${pill(l.status)}</div>
+        <div class="c-summary summary">${esc(l.last_summary || '')}</div>
+        <div><button class="small" data-call="${l.id}">Call</button></div>
+      </div>`).join('');
+  }
   $('#callSelected').disabled = !selected.size;
+  $('#callSelected').textContent = selected.size ? `Call ${selected.size} selected` : 'Call selected';
 }
 
-$('#rows').onclick = async (e) => {
-  const callId = e.target.dataset.call;
-  if (callId) return callOne(Number(callId), e.target);
-  if (e.target.closest('.sel') || e.target.closest('td:first-child')) return; // handled by onchange
-  const tr = e.target.closest('tr[data-id]');
-  if (tr) openLead(Number(tr.dataset.id));
-};
-$('#rows').onchange = (e) => {
-  if (!e.target.classList.contains('sel')) return;
-  const id = Number(e.target.dataset.id);
-  e.target.checked ? selected.add(id) : selected.delete(id);
+$('#list').addEventListener('change', (e) => {
+  if (e.target.id === 'selectAll') {
+    for (const l of leads) e.target.checked ? selected.add(l.id) : selected.delete(l.id);
+  } else if (e.target.classList.contains('sel')) {
+    const id = Number(e.target.dataset.id);
+    e.target.checked ? selected.add(id) : selected.delete(id);
+  }
   render();
-};
-$('#selectAll').onchange = (e) => { for (const l of leads) e.target.checked ? selected.add(l.id) : selected.delete(l.id); render(); };
+});
+$('#list').addEventListener('click', (e) => {
+  if (e.target.matches('input')) return;
+  const call = e.target.closest('[data-call]');
+  if (call) return callOne(Number(call.dataset.call));
+  const item = e.target.closest('.item[data-id]');
+  if (item) openLead(Number(item.dataset.id));
+});
 
-async function callOne(id, btn) {
-  const lead = leads.find((l) => l.id === id);
-  if (!confirm(`Call ${lead?.business_name} at ${lead?.phone} now?`)) return;
-  if (btn) btn.disabled = true;
+async function callOne(id) {
+  const lead = leads.find((l) => l.id === id) || {};
+  if (!confirm(`Call ${lead.business_name || 'this business'} now?`)) return;
   try {
-    await api(`/api/leads/${id}/call`, { method: 'POST', body: JSON.stringify({ ignoreWindow: $('#ignoreWindow').checked }) });
-    toast('Calling…');
+    await api(`/api/leads/${id}/call`, { method: 'POST', body: '{}' });
+    toast('Calling… the result shows up here when the call ends.');
   } catch (err) { toast('Not called: ' + err.message); }
   refresh();
 }
 
 $('#callSelected').onclick = async () => {
-  if (!confirm(`Queue ${selected.size} calls? They will be placed one after another.`)) return;
-  const r = await api('/api/call-batch', { method: 'POST', body: JSON.stringify({ ids: [...selected], ignoreWindow: $('#ignoreWindow').checked }) });
+  if (!confirm(`Call ${selected.size} businesses? They'll be called one after another during calling hours.`)) return;
+  const r = await api('/api/call-batch', { method: 'POST', body: JSON.stringify({ ids: [...selected] }) });
   const queued = r.results.filter((x) => x.queued).length;
   const skipped = r.results.filter((x) => !x.queued);
-  toast(`${queued} queued${skipped.length ? `, ${skipped.length} skipped (${skipped[0].reason})` : ''}`);
+  toast(`${queued} added to the call list.` + (skipped.length ? ` ${skipped.length} skipped (${skipped[0].reason}).` : ''));
   selected.clear();
   refresh();
 };
-$('#clearQueue').onclick = async () => { await api('/api/queue/clear', { method: 'POST' }); toast('Queue cleared (calls in progress continue)'); refresh(); };
+$('#stopQueue').onclick = async () => { await api('/api/queue/clear', { method: 'POST' }); toast('Stopped. A call in progress will finish.'); refresh(); };
 
-// The sheet is read here in the browser; only the rows are sent to the server.
+let searchT;
+$('#q').oninput = () => { clearTimeout(searchT); searchT = setTimeout(loadLeads, 250); };
+
+// ---------- Upload (the sheet is read in the browser; only rows are sent) ----------
+$('#uploadBtn').onclick = () => $('#file').click();
+$('#file').onchange = async () => {
+  const f = $('#file').files[0];
+  if (!f) return;
+  try {
+    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+    const r = await api('/api/import', { method: 'POST', body: JSON.stringify({ filename: f.name, rows: sheetRows(wb) }) });
+    toast(`Added ${r.imported} businesses.` + (r.skipped.length ? ` ${r.skipped.length} rows skipped (no name or phone).` : ''));
+    group = 'all';
+    refresh();
+  } catch (err) { toast(err.message); }
+  $('#file').value = '';
+};
 function sheetRows(wb) {
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws || !ws['!ref']) return [];
@@ -244,80 +429,95 @@ function sheetRows(wb) {
   return rows;
 }
 
-$('#uploadBtn').onclick = async () => {
-  const f = $('#file').files[0];
-  if (!f) return toast('Pick a .xlsx or .csv file first');
-  try {
-    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
-    const r = await api('/api/import', { method: 'POST', body: JSON.stringify({ filename: f.name, rows: sheetRows(wb) }) });
-    $('#importResult').textContent = `Imported ${r.imported}, skipped ${r.skipped.length}. Columns used: ` +
-      Object.entries(r.mapping).map(([k, v]) => `${k}←"${v}"`).join(', ');
-    refresh();
-  } catch (err) { $('#importResult').textContent = err.message; }
-};
-
-let searchT;
-$('#q').oninput = () => { clearTimeout(searchT); searchT = setTimeout(loadLeads, 250); };
-$('#statusFilter').onchange = loadLeads;
-$('#categoryFilter').onchange = loadLeads;
-
+// ---------- One business ----------
 async function openLead(id) {
-  const { lead, calls, events } = await api(`/api/leads/${id}`);
+  const { lead, calls } = await api(`/api/leads/${id}`);
   const link = (u) => u ? `<a href="${esc(/^https?:/.test(u) ? u : 'https://' + u)}" target="_blank" rel="noopener">${esc(u)}</a>` : '';
+  const rows = [['Owner', esc(lead.contact_name)], ['Phone', esc(lead.phone)], ['Email', esc(lead.email)],
+    ['Website', link(lead.website)], ['Redesign', link(lead.demo_link)], ['Category', esc(lead.category)],
+    ['City', esc(lead.city)], ['Follow up', esc(lead.meeting_time)], ['Notes', esc(lead.notes)]].filter((r) => r[1]);
   $('#drawer').innerHTML = `
-    <div class="row"><h2 style="margin:0;flex:1">${esc(lead.business_name)}</h2><button id="closeDrawer">Close</button></div>
-    <dl style="margin-top:12px">
-      <dt>Contact</dt><dd>${esc(lead.contact_name)}</dd>
-      <dt>Phone</dt><dd>${esc(lead.phone)}</dd>
-      <dt>Email</dt><dd>${esc(lead.email)}</dd>
-      <dt>Website</dt><dd>${link(lead.website)}</dd>
-      <dt>Redesign</dt><dd>${link(lead.demo_link)}</dd>
-      <dt>Category</dt><dd>${esc(lead.category)}</dd>
-      <dt>City</dt><dd>${esc(lead.city)}</dd>
-      <dt>Follow-up</dt><dd>${esc(lead.meeting_time)}</dd>
-      <dt>Notes</dt><dd>${esc(lead.notes)}</dd>
-    </dl>
-    <div class="row" style="margin:14px 0">
-      <select id="leadStatus">${STATUSES.map((s) => `<option ${s === lead.status ? 'selected' : ''}>${s}</option>`).join('')}</select>
-      <button id="saveStatus">Set status</button>
-      <button id="resetTries">Reset tries</button>
-      <button class="primary" id="drawerCall">Call now</button>
-      <button id="deleteLead" style="margin-left:auto">Delete</button>
+    <div class="row"><h2 style="margin:0;flex:1">${esc(lead.business_name)}</h2><button class="small" id="closeDrawer">Close</button></div>
+    <div style="margin-top:8px">${pill(lead.status)} <span class="muted">${lead.attempts} call${lead.attempts === 1 ? '' : 's'} so far</span></div>
+    <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
+    <div class="row">
+      <button class="primary" id="dCall">Call now</button>
+      <select id="dStatus" style="width:auto">${Object.entries(STATUS).map(([k, [l]]) => `<option value="${k}" ${k === lead.status ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <button class="small" id="dDelete" style="margin-left:auto">Delete</button>
     </div>
     <h3>Calls</h3>
     ${calls.map((c) => `
       <div class="card">
-        <div class="row"><strong>${esc(c.created_at)} UTC</strong><span class="pill">${esc(c.status)}</span>
-          ${c.outcome?.outcome ? `<span class="pill ${esc(c.outcome.outcome)}">${esc(c.outcome.outcome)}</span>` : ''}
-          ${c.duration_secs ? `<span class="muted">${c.duration_secs}s</span>` : ''}</div>
-        ${c.error ? `<p class="no">${esc(c.error)}</p>` : ''}
+        <div class="row"><b>${esc(new Date(c.created_at.replace(' ', 'T') + 'Z').toLocaleString())}</b>
+          ${c.duration_secs ? `<span class="muted">${Math.round(c.duration_secs / 60 * 10) / 10} min</span>` : ''}</div>
+        ${c.error ? `<p style="color:var(--bad)">${esc(c.error)}</p>` : ''}
         ${c.summary ? `<p>${esc(c.summary)}</p>` : ''}
-        ${c.outcome?.next_step ? `<p><strong>Next step:</strong> ${esc(c.outcome.next_step)}</p>` : ''}
-        ${c.transcript.length ? `<details><summary>Transcript</summary>${c.transcript.map((t) => `<div class="bubble ${t.role}">${esc(t.message)}</div>`).join('')}</details>` : ''}
-      </div>`).join('') || '<p class="muted">No calls yet.</p>'}
-    <h3>Activity</h3>
-    ${events.map((e) => `<div class="muted">${esc(e.created_at)} · ${esc(e.kind)} ${esc(e.detail && e.detail !== 'null' ? e.detail : '')}</div>`).join('')}
-  `;
+        ${c.outcome?.next_step ? `<p><b>Next step:</b> ${esc(c.outcome.next_step)}</p>` : ''}
+        ${c.transcript.length ? `<details><summary>Read the conversation</summary>${c.transcript.map((t) => `<div class="bubble ${t.role}">${esc(t.message)}</div>`).join('')}</details>` : ''}
+      </div>`).join('') || '<p class="muted">Not called yet.</p>'}`;
   $('#drawer').classList.add('open');
   $('#closeDrawer').onclick = () => $('#drawer').classList.remove('open');
-  $('#saveStatus').onclick = async () => { await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ status: $('#leadStatus').value }) }); toast('Saved'); refresh(); openLead(id); };
-  $('#resetTries').onclick = async () => { await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ attempts: 0 }) }); toast('Tries reset'); refresh(); openLead(id); };
-  $('#drawerCall').onclick = () => callOne(id).then(() => openLead(id));
-  $('#deleteLead').onclick = async () => {
+  $('#dCall').onclick = async () => { await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ attempts: 0 }) }).catch(() => {}); await callOne(id); openLead(id); };
+  $('#dStatus').onchange = async () => { await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ status: $('#dStatus').value }) }); toast('Saved'); refresh(); };
+  $('#dDelete').onclick = async () => {
     if (!confirm('Delete this business and its call history?')) return;
     await api(`/api/leads/${id}`, { method: 'DELETE' });
     $('#drawer').classList.remove('open'); refresh();
   };
 }
 
-function refresh() { return Promise.all([loadStatus(), loadLeads()]).catch(() => {}); }
+// ---------- Settings ----------
+const hours = Array.from({ length: 25 }, (_, h) => `<option value="${h}">${h === 0 || h === 24 ? '12 am' : h < 12 ? h + ' am' : h === 12 ? '12 pm' : (h - 12) + ' pm'}</option>`).join('');
+document.querySelector('[name=CALL_WINDOW_START]').innerHTML = hours;
+document.querySelector('[name=CALL_WINDOW_END]').innerHTML = hours;
+$('#days').innerHTML = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+  .map((d, i) => `<label><input type="checkbox" value="${i + 1}"> ${d}</label>`).join('');
 
-async function start() {
-  $('#login').hidden = true; $('#app').hidden = false;
-  await refresh();
+const DEFAULTS = { OPENAI_REALTIME_MODEL: 'gpt-realtime-mini', OPENAI_VOICE: 'marin', CALL_WINDOW_START: '9', CALL_WINDOW_END: '17',
+  CALL_DAYS: '1,2,3,4,5', DEFAULT_TIMEZONE: 'America/New_York', DEFAULT_COUNTRY_CODE: '1', CALL_SPACING_SECONDS: '90', MAX_ATTEMPTS: '3', AGENT_NAME: 'Alex' };
+
+async function loadSettings() {
+  const s = await api('/api/settings');
+  const form = $('#settingsForm');
+  for (const [key, value] of Object.entries(s)) {
+    const el = form.elements[key];
+    if (!el) continue;
+    if (typeof value === 'object') { // secret: never shown, only whether it's set
+      el.value = '';
+      el.placeholder = value.set ? `Saved (${value.hint}). Leave empty to keep it.` : 'Not set yet';
+    } else {
+      el.value = value || DEFAULTS[key] || '';
+    }
+  }
+  const days = (s.CALL_DAYS || DEFAULTS.CALL_DAYS).split(',');
+  document.querySelectorAll('#days input').forEach((cb) => (cb.checked = days.includes(cb.value)));
 }
+
+$('#settingsForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  data.CALL_DAYS = [...document.querySelectorAll('#days input:checked')].map((cb) => cb.value).join(',');
+  try {
+    await api('/api/settings', { method: 'PUT', body: JSON.stringify(data) });
+    $('#saveResult').textContent = 'Saved.';
+    setTimeout(() => ($('#saveResult').textContent = ''), 3000);
+    loadSettings(); loadStatus();
+  } catch (err) { $('#saveResult').textContent = err.message; }
+};
+
+$('#testCall').onclick = async () => {
+  $('#testResult').textContent = 'Calling…';
+  try {
+    await api('/api/test-call', { method: 'POST', body: JSON.stringify({ phone: $('#testPhone').value, business_name: $('#testBusiness').value }) });
+    $('#testResult').textContent = 'Your phone should ring in a few seconds. The result appears under Businesses.';
+  } catch (err) { $('#testResult').textContent = err.message; }
+};
+
+// ---------- Start ----------
+function refresh() { return Promise.all([loadStatus(), loadLeads()]).catch(() => {}); }
+async function start() { $('#login').hidden = true; $('#app').hidden = false; await refresh(); }
 api('/api/status').then(start).catch(() => showLogin());
-setInterval(() => { if (!$('#app').hidden) refresh(); }, 10000);
+setInterval(() => { if (!$('#app').hidden && !$('#tab-leads').hidden) refresh(); }, 8000);
 </script>
 </body>
 </html>

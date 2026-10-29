@@ -1,8 +1,10 @@
 // Framework-free HTTP handlers for the dashboard API and the agent's tools.
 // req = { method, path, query: {}, body, headers: { cookie, 'x-tool-secret' } }
 // returns { status, json, headers? }
-// ctx = { config, store, sendEmail, queue: { enqueue(ids, opts), state(), clear() } }
-import { rowsToLeads, canCallNow } from './leads.js';
+// ctx = { config, env, store, sendEmail, queue: { enqueue(ids, opts), state(), clear() } }
+//   env: the raw environment variables (saved dashboard settings are layered on top of them in config)
+import { rowsToLeads, canCallNow, normalizePhone } from './leads.js';
+import { settingsForDashboard, cleanSettingsUpdate } from './settings.js';
 import { placeCall, sendDemoLink, markDoNotCall, providerProblem } from './actions.js';
 import { hmacHex, safeEqual } from './crypto.js';
 
@@ -72,6 +74,29 @@ export async function handleRequest(ctx, req) {
       },
       counts: await store.statusCounts(),
     });
+  }
+
+  if (path === '/api/settings') {
+    if (method === 'GET') return ok(settingsForDashboard(ctx.env, await store.getSettings()));
+    if (method === 'PUT') {
+      await store.saveSettings(cleanSettingsUpdate(body));
+      return ok({ ok: true });
+    }
+  }
+
+  // Calls your own phone with a pretend business, ignoring calling hours and attempt limits.
+  if (method === 'POST' && path === '/api/test-call') {
+    const phone = normalizePhone(body.phone, config.calling.defaultCountryCode);
+    if (!phone) return ok({ ok: false, error: 'Enter a valid phone number' }, 400);
+    await store.upsertLeads([{
+      phone, business_name: body.business_name || 'Test Business', contact_name: body.contact_name || null,
+      email: body.email || null, website: null, demo_link: body.demo_link || null, category: body.category || 'dental',
+      city: null, timezone: null, notes: 'This is a test call to the owner of the calling system.', extra: '{}',
+    }]);
+    const lead = await store.getLeadByPhone(phone);
+    await store.updateLead(lead.id, { status: 'new', attempts: 0 });
+    const r = await placeCall(ctx, lead.id, { ignoreWindow: true });
+    return ok({ ...r, leadId: lead.id }, r.ok ? 200 : 400);
   }
 
   if (method === 'POST' && path === '/api/import') {

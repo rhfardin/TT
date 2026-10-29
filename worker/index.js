@@ -37,8 +37,10 @@ function d1(DB) {
 // publicUrl: PUBLIC_URL if set, otherwise the address the dashboard was opened on.
 async function makeCtx(env, publicUrl) {
   await ensureSchema(env);
-  const config = buildConfig({ ...env, PUBLIC_URL: env.PUBLIC_URL || publicUrl });
-  const ctx = { config, store: createStore(d1(env.DB)), sendEmail: resendSender(config.email) };
+  const store = createStore(d1(env.DB));
+  // Settings saved in the dashboard override wrangler.jsonc vars and secrets.
+  const config = buildConfig({ ...env, ...(await store.getSettings()), PUBLIC_URL: env.PUBLIC_URL || publicUrl });
+  const ctx = { config, env, store, sendEmail: resendSender(config.email) };
   const dialer = () => env.DIALER.get(env.DIALER.idFromName('main'));
   ctx.queue = {
     enqueue: (ids, opts) => dialer().enqueue(ids, opts, config.publicUrl),

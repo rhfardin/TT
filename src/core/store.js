@@ -15,6 +15,7 @@ function setClause(fields, allowed) {
 export function createStore(db) {
   return {
     getLead: (id) => db.get('SELECT * FROM leads WHERE id = ?', Number(id)),
+    getLeadByPhone: (phone) => db.get('SELECT * FROM leads WHERE phone = ?', phone),
     async updateLead(id, fields) {
       const s = setClause(fields, LEAD_COLUMNS);
       if (s.keys.length) await db.run(`UPDATE leads SET ${s.sql} WHERE id = ?`, ...s.args, Number(id));
@@ -31,7 +32,11 @@ export function createStore(db) {
     listLeads({ status, category, q } = {}) {
       const where = [];
       const args = [];
-      if (status) { where.push('status = ?'); args.push(status); }
+      if (status) {
+        const list = String(status).split(',').filter(Boolean);
+        where.push(`status IN (${list.map(() => '?').join(', ')})`);
+        args.push(...list);
+      }
       if (category) { where.push('category = ?'); args.push(category); }
       if (q) {
         where.push('(business_name LIKE ? OR contact_name LIKE ? OR phone LIKE ? OR city LIKE ?)');
@@ -61,6 +66,14 @@ export function createStore(db) {
     async logEvent(leadId, kind, detail) {
       await db.run('INSERT INTO events (lead_id, kind, detail) VALUES (?, ?, ?)', leadId ?? null, kind,
         typeof detail === 'string' ? detail : JSON.stringify(detail ?? null));
+    },
+    async getSettings() {
+      return Object.fromEntries((await db.all('SELECT key, value FROM settings')).map((r) => [r.key, r.value]));
+    },
+    async saveSettings(values) {
+      for (const [key, value] of Object.entries(values)) {
+        await db.run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, value);
+      }
     },
     eventsForLead: (leadId) => db.all('SELECT * FROM events WHERE lead_id = ? ORDER BY id DESC LIMIT 50', Number(leadId)),
   };

@@ -18,6 +18,8 @@ Your sheet (.xlsx/.csv) ──► Dashboard (your domain) ──► "Call" ─�
 - **Personalized pitch.** Each call gets the business's name, category, city, current site and your notes. The script is in [`prompts/sales-agent.md`](prompts/sales-agent.md); edit it freely.
 - **Closes on the call.** When they agree, the AI sends the preview link and your booking/payment links by email (or SMS) during the call.
 - **Results.** Each call stores the transcript, a summary, the outcome (`link_sent`, `interested`, `callback`, `not_interested`, `voicemail`, `do_not_call`, `sold`), any follow-up time or email they gave, and a suggested next step.
+- **Settings page.** API keys, your name and price, voice, and calling hours are all set in the dashboard. Keys are saved on your server and never shown again in full. Values saved there override `.env` / `wrangler.jsonc`.
+- **Test call.** Settings has a **Call me now** button that calls your own phone with a pretend business, at any time of day.
 - **Safety rails.** The AI says it is an AI. It only calls inside your calling hours in the business's timezone. It stops after `MAX_ATTEMPTS` tries. "Don't call me again" puts the business on the do-not-call list permanently. It hangs up on voicemail without leaving a message.
 
 ## Which voice AI? (cost per minute, late 2026, check current prices)
@@ -80,17 +82,12 @@ npm ci
 npx wrangler login
 npx wrangler d1 create ai-caller        # copy the database_id it prints into wrangler.jsonc
 ```
-1. Edit the `vars` section of `wrangler.jsonc` with your settings: your name, company, price, links, `EMAIL_FROM`, `TWILIO_FROM_NUMBER`, calling hours.
-2. Add the secrets. Each command asks for the value:
+1. Set your dashboard password. It asks for the value:
    ```bash
    npx wrangler secret put ADMIN_PASSWORD
-   npx wrangler secret put OPENAI_API_KEY
-   npx wrangler secret put TWILIO_ACCOUNT_SID
-   npx wrangler secret put TWILIO_AUTH_TOKEN
-   npx wrangler secret put RESEND_API_KEY
    ```
-   (For ElevenLabs instead: `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID`, `ELEVENLABS_PHONE_NUMBER_ID`, `ELEVENLABS_WEBHOOK_SECRET`, `TOOL_SECRET`, and set `VOICE_PROVIDER` to `elevenlabs`.)
-3. Deploy with `npm run cf:deploy`. You get a `https://ai-caller.<you>.workers.dev` address that works right away.
+2. Deploy with `npm run cf:deploy`. You get a `https://ai-caller.<you>.workers.dev` address that works right away.
+3. Open the address, log in, and go to **Settings**. Paste your OpenAI key, Twilio details and Resend key there, then use **Call me now** to test.
 4. **Your domain** (optional): Cloudflare dashboard → Workers & Pages → ai-caller → Settings → Domains & Routes → add `calls.yourdomain.com`. The domain must be on Cloudflare. Then add `"PUBLIC_URL": "https://calls.yourdomain.com"` to `vars` and deploy again.
 
 Free plan limits are far above what calling needs: 100,000 requests a day, and Durable Objects and D1 are included. To change the sales script, edit `prompts/sales-agent.md` and run `npm run cf:deploy` again. Cloudflare Pages alone can't run this, because it only serves static files. This setup uses Workers, which also serves the dashboard.

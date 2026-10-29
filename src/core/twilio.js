@@ -1,13 +1,15 @@
 import { hmacHex, hmacSha1Base64, safeEqual } from './crypto.js';
 
 async function post(tw, path, params) {
-  const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${tw.accountSid}${path}`, {
+  const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(tw.accountSid)}${path}`, {
     method: 'POST',
     headers: {
       Authorization: 'Basic ' + btoa(`${tw.accountSid}:${tw.authToken}`),
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: new URLSearchParams(params),
+  }).catch((err) => {
+    throw new Error(`Could not reach Twilio (${err.message})`);
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.message || `Twilio HTTP ${res.status}`);
