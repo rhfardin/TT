@@ -25,12 +25,12 @@ Your sheet (.xlsx/.csv) ──► Dashboard (your domain) ──► "Call" ─�
 | | OpenAI Realtime (default) | ElevenLabs Agents |
 |---|---|---|
 | Subscription | None, pay as you go | Needs a paid plan (from about $6/mo) beyond 15 free minutes |
-| Voice + AI per minute | about $0.10–0.25 with `gpt-realtime`, about $0.03–0.06 with `gpt-realtime-mini` | about $0.08 plus about $0.01 for the LLM |
+| Voice + AI per minute | about $0.03 with `gpt-realtime-mini` (default), about $0.08 with `gpt-realtime` | about $0.08 plus about $0.01 for the LLM |
 | Twilio phone | about $0.014/min plus about $1.15/mo per number | same (the calls go through your Twilio number) |
 | Voice realism | Very natural, speech-to-speech, fast at handling interruptions | Widest choice of very human voices (you can also clone your own) |
 | Setup | Just API keys in `.env` | Build the agent in the ElevenLabs dashboard (steps below) |
 
-Calls to small businesses are short. Most are unanswered or last under a minute, and a good conversation is 2 to 4 minutes. So 100 calls usually costs **about $3–15**. Switch providers any time with `VOICE_PROVIDER=openai|elevenlabs`; no other code changes.
+Calls to small businesses are short. Most are unanswered or last under a minute, and a good conversation is 2 to 4 minutes. So 100 calls usually costs **about $5** with `gpt-realtime-mini` (the default), or about $10 with `gpt-realtime`, plus $1.15/month for the phone number. For the best-quality voice, set `OPENAI_REALTIME_MODEL=gpt-realtime`. Switch providers any time with `VOICE_PROVIDER=openai|elevenlabs`; no other code changes.
 
 ## Setup
 

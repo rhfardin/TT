@@ -27,7 +27,7 @@
   //   npx wrangler secret put ADMIN_PASSWORD   (and OPENAI_API_KEY, TWILIO_AUTH_TOKEN, RESEND_API_KEY, ...)
   "vars": {
     "VOICE_PROVIDER": "openai",
-    "OPENAI_REALTIME_MODEL": "gpt-realtime",
+    "OPENAI_REALTIME_MODEL": "gpt-realtime-mini",
     "OPENAI_VOICE": "marin",
     "AGENT_NAME": "Alex",
     "YOUR_NAME": "",

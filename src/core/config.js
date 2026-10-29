@@ -18,7 +18,7 @@ export function buildConfig(e) {
     openai: {
       apiKey: env('OPENAI_API_KEY'),
       realtimeUrl: env('OPENAI_REALTIME_URL', 'wss://api.openai.com/v1/realtime'),
-      realtimeModel: env('OPENAI_REALTIME_MODEL', 'gpt-realtime'),
+      realtimeModel: env('OPENAI_REALTIME_MODEL', 'gpt-realtime-mini'),
       voice: env('OPENAI_VOICE', 'marin'),
       analysisModel: env('OPENAI_ANALYSIS_MODEL', 'gpt-4.1-mini'),
     },
