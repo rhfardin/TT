@@ -26,9 +26,7 @@ Write answers the way you'd say them on the phone. **Only write true things**, b
 ### 1. Who are you?
 Where you're based, how long you've done this, how many sites, portfolio link.
 
-> Fardin runs Rizer Web, based in Wyoming, USA. He has been building websites for over 8 years and has made more than 800 sites for all kinds of local businesses. Portfolio: rhfardin.com. Besides websites, Rizer Web also does SEO, Google Ads and social media marketing management. The main focus is great websites that build brand visibility and growth.
->
-> ⚠ *Check: directory listings (DesignRush, The Manifest) show RH Fardin as based in Rajshahi, Bangladesh, founded 2017. Make sure what the AI says matches what owners will find online. Example: "a US company registered in Wyoming, with our team working remotely".*
+> Fardin runs Rizer Web, a US company registered in Wyoming; the team works remotely. He has been building websites for over 8 years and has made more than 800 sites for all kinds of local businesses. Portfolio: rhfardin.com. Besides websites, Rizer Web also does SEO, Google Ads and social media marketing management. The main focus is great websites that build brand visibility and growth.
 
 ### 2. What's included in the website?
 Pages, mobile, booking, SEO, hosting, who writes text/photos.
@@ -64,6 +62,7 @@ One per line: `Q: … A: …`
 > Q: Do you do Google Ads or marketing? A: Yes. Rizer Web also does SEO, Google Ads and social media management; Fardin can talk you through it.
 > Q: Do I pay upfront? A: No. You pay nothing until the site is live.
 > Q: How do I reach Fardin? A: Email hello@rhfardin.com, or book a quick call with him.
+> Q: Where are you based? A: Rizer Web is a US company registered in Wyoming, and the team works remotely.
 
 *Ideas to add later:* Can we edit the site ourselves? What if we already have a web designer? How much is hosting after year one? Can it be in Spanish? Do you work with [their industry]?
 
