@@ -48,9 +48,9 @@ Price, what it covers, monthly fees, when they pay, how low you can negotiate.
 > Typically 4 to 5 rounds of changes, whatever they need. The owner owns the domain, the site and the code; Fardin keeps nothing. After the first year the hosting stays on their own email, so they can just keep it going. Since the site is already made there's no money-back guarantee, but there is a satisfaction guarantee: Fardin doesn't get paid a single dime until the site is live on their hosting.
 
 ### 7. Past work and results (true facts only)
-> Past clients include USA West, SRS Networks, Web Services Now and Streamline Custom Solutions. Several past clients saw bookings go up a lot after their new site, around 50% and in some cases up to 100%. Owners also find a modern site builds customer trust and helps them show up better on Google and in AI search like ChatGPT.
+> Past clients include USA West, SRS Networks, VoIP Services Now and Streamline Custom Solutions. Several past clients saw bookings go up a lot after their new site, around 50% and in some cases up to 100%. Owners also find a modern site builds customer trust and helps them show up better on Google and in AI search like ChatGPT.
 >
-> ⚠ *Check the spelling of the client names. The AI says them out loud.*
+> ⚠ *Confirm the spelling of "USA West". The AI says client names out loud.*
 
 ### 8. Questions owners ask, with your answers
 One per line: `Q: … A: …`
