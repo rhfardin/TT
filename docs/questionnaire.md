@@ -18,7 +18,7 @@ Write answers the way you'd say them on the phone. **Only write true things**, b
 | AI caller's name | Alex |
 | Booking link (Calendly etc.) | ⚠ *none yet; add one if you have it* |
 | Payment link | *(leave empty: you send bank details after the site is live)* |
-| Email the follow-ups come from (must be verified in Resend) | Fardin at Rizer Web \<hello@rhfardin.com\> |
+| Email the follow-ups come from (must be verified in Resend) | Fardin \<hello@rhfardin.com\> |
 
 ## B. What the AI knows
 *Settings → "3. What the AI knows"*
@@ -26,7 +26,7 @@ Write answers the way you'd say them on the phone. **Only write true things**, b
 ### 1. Who are you?
 Where you're based, how long you've done this, how many sites, portfolio link.
 
-> Fardin runs Rizer Web, a US company registered in Wyoming; the team works remotely. He has been building websites for over 8 years and has made more than 800 sites for all kinds of local businesses. Portfolio: rhfardin.com. Besides websites, Rizer Web also does SEO, Google Ads and social media marketing management. The main focus is great websites that build brand visibility and growth.
+> Fardin is an independent contractor, a web designer. He has been building websites for over 8 years and has made more than 800 sites for all kinds of local businesses. Portfolio: rhfardin.com. Besides websites, he also does SEO, Google Ads and social media marketing management. The main focus is great websites that build brand visibility and growth. If they ask about a company or business name: Fardin works under the name Rizer Web, a US company registered in Wyoming, and works remotely.
 
 ### 2. What's included in the website?
 Pages, mobile, booking, SEO, hosting, who writes text/photos.
@@ -59,10 +59,11 @@ One per line: `Q: … A: …`
 > Q: Will it work with our booking system? A: Yes, it can connect to any booking or business system.
 > Q: Who owns the site? A: You do: the domain, the site and the code, all under your email.
 > Q: What happens after the first year? A: Hosting stays on your own account, so you just keep it running.
-> Q: Do you do Google Ads or marketing? A: Yes. Rizer Web also does SEO, Google Ads and social media management; Fardin can talk you through it.
+> Q: Do you do Google Ads or marketing? A: Yes. Fardin also does SEO, Google Ads and social media management; Fardin can talk you through it.
 > Q: Do I pay upfront? A: No. You pay nothing until the site is live.
 > Q: How do I reach Fardin? A: Email hello@rhfardin.com, or book a quick call with him.
-> Q: Where are you based? A: Rizer Web is a US company registered in Wyoming, and the team works remotely.
+> Q: Where are you based? A: Fardin works remotely. His business, Rizer Web, is a US company registered in Wyoming.
+> Q: Is this a company or one person? A: Fardin is an independent contractor; he works under the business name Rizer Web.
 
 *Ideas to add later:* Can we edit the site ourselves? What if we already have a web designer? How much is hosting after year one? Can it be in Spanish? Do you work with [their industry]?
 
