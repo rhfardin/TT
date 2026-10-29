@@ -51,6 +51,20 @@ Point your domain's DNS **A record** (for example `calls.yourdomain.com`) to the
 
 Without Docker: Node 22.13 or newer, then `npm ci && npm start`, behind any reverse proxy that supports WebSockets.
 
+### Or: run it from your own computer (free)
+No server needed; it only has to be running while you make calls. Cloudflare Tunnel (free) gives your computer a public HTTPS address that Twilio can reach.
+
+1. Install [Node.js 22](https://nodejs.org) (LTS) and [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/).
+2. In this folder: `npm ci`, then `cp .env.example .env` and fill it in.
+3. Start a tunnel in one terminal:
+   ```bash
+   cloudflared tunnel --url http://localhost:3000
+   ```
+   It prints an address like `https://random-words.trycloudflare.com`. Put it in `.env` as `PUBLIC_URL`.
+4. Start the app in a second terminal: `npm run local`, then open `http://localhost:3000`.
+
+The quick tunnel address changes every time you start `cloudflared`, so update `PUBLIC_URL` and restart the app each time. For a fixed address on your own domain (for example `calls.yourdomain.com`, with the domain on Cloudflare), create a [named tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-local-tunnel/) once and use that instead. Your leads and call history stay on your computer in `data/`. Keep the computer awake while calls run.
+
 ### 3. First test
 Add yourself as a row in the sheet (with your own phone number), upload it, and press **Call**. Listen to how it pitches, then adjust `prompts/sales-agent.md` and `.env` (voice, price, links). Restart with `docker compose restart app`.
 
