@@ -26,6 +26,7 @@
   button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
   button.small { padding: 5px 11px; font-size: 14px; }
   button:disabled { opacity: .45; cursor: default; }
+  textarea { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); width: 100%; min-height: 76px; resize: vertical; }
   input, select { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); width: 100%; }
   input[type=checkbox] { width: auto; }
   .muted { color: var(--muted); }
@@ -203,7 +204,34 @@
         </div>
 
         <div class="card">
-          <h2>3. Follow-up email</h2>
+          <h2>3. What the AI knows</h2>
+          <p class="muted" style="margin:0">The AI uses your answers to reply to business owners' questions on every call. Write it the way you'd explain it on the phone. Leave anything you're unsure about empty: the AI will then say you'll follow up, instead of guessing.</p>
+          <div class="grid">
+            <div class="full"><label>Who are you? <span class="help">Your experience, where you're based, how many sites you've built, portfolio link</span></label>
+              <textarea name="KB_ABOUT" placeholder="I'm Sam, I run a two-person web studio in Austin. We've built 40+ sites for local clinics and spas. Portfolio: samstudio.com/work"></textarea></div>
+            <div class="full"><label>What's included in the website?</label>
+              <textarea name="KB_INCLUDED" placeholder="Up to 6 pages, mobile-friendly, online booking button (works with their current booking system), Google Maps, contact form, basic Google SEO setup, fast hosting, SSL."></textarea></div>
+            <div class="full"><label>Pricing and payment <span class="help">Prices, payment plans, monthly fees, what's free</span></label>
+              <textarea name="KB_PRICING" placeholder="$499 one-time to launch, then $49/month for hosting, updates and small edits. Can split the $499 into two payments. No contract, cancel the monthly any time. The preview is free with no obligation."></textarea></div>
+            <div class="full"><label>How fast can it go live?</label>
+              <textarea name="KB_TIMELINE" placeholder="Usually live within 3-5 days after they say yes, including one round of changes."></textarea></div>
+            <div class="full"><label>What happens after they say yes?</label>
+              <textarea name="KB_PROCESS" placeholder="I send a short form for their logo, photos and services, then a 15-minute call to go over changes. We connect their existing domain; they don't need to do anything technical."></textarea></div>
+            <div class="full"><label>Changes, ownership and guarantees</label>
+              <textarea name="KB_GUARANTEE" placeholder="Unlimited small changes in the first 2 weeks. They own the domain and all their content. If they cancel the monthly, we hand over the site files."></textarea></div>
+            <div class="full"><label>Past work and results <span class="help">Only true facts: the AI will repeat these</span></label>
+              <textarea name="KB_PROOF" placeholder="Did the site for Lakeview Dental in Austin: they told us online bookings roughly doubled in the first two months."></textarea></div>
+            <div class="full"><label>Other questions owners ask, with your answers</label>
+              <textarea name="KB_FAQ" style="min-height:110px" placeholder="Q: Can you keep our current domain? A: Yes, we just point it to the new site.&#10;Q: Do you do Google Ads? A: Not right now, just the website and basic SEO.&#10;Q: Can it be in Spanish too? A: Yes, for $150 extra."></textarea></div>
+            <div class="full"><label>What should the AI aim for at the end of the call?</label>
+              <textarea name="KB_CLOSE" placeholder="Get them to look at the preview and book a 15-minute call with me (booking link). If they're very keen, send the payment link."></textarea></div>
+            <div class="full"><label>Never say or promise <span class="help">Things the AI must not say</span></label>
+              <textarea name="KB_NEVER" placeholder="Never promise more patients or a ranking on Google. Never offer discounts. Don't badmouth their current web designer."></textarea></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>4. Follow-up email</h2>
           <p class="muted" style="margin:0">The AI emails the redesign link during the call. Free with <a href="https://resend.com" target="_blank" rel="noopener">Resend</a> (verify your domain there).</p>
           <div class="grid">
             <div><label>Resend API key</label><input name="RESEND_API_KEY" type="password" autocomplete="off" placeholder="re_…"></div>
@@ -212,7 +240,7 @@
         </div>
 
         <div class="card">
-          <h2>4. When to call</h2>
+          <h2>5. When to call</h2>
           <div class="grid">
             <div><label>Start hour</label><select name="CALL_WINDOW_START"></select></div>
             <div><label>End hour</label><select name="CALL_WINDOW_END"></select></div>
@@ -453,6 +481,7 @@ async function openLead(id) {
         ${c.error ? `<p style="color:var(--bad)">${esc(c.error)}</p>` : ''}
         ${c.summary ? `<p>${esc(c.summary)}</p>` : ''}
         ${c.outcome?.next_step ? `<p><b>Next step:</b> ${esc(c.outcome.next_step)}</p>` : ''}
+        ${c.outcome?.requests ? `<p><b>They asked for:</b> ${esc(c.outcome.requests)}</p>` : ''}
         ${c.transcript.length ? `<details><summary>Read the conversation</summary>${c.transcript.map((t) => `<div class="bubble ${t.role}">${esc(t.message)}</div>`).join('')}</details>` : ''}
       </div>`).join('') || '<p class="muted">Not called yet.</p>'}`;
   $('#drawer').classList.add('open');

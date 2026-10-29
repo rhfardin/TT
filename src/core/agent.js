@@ -1,5 +1,25 @@
 // What the AI says and can do: prompt variables, tools, outcomes, follow-up message.
 
+const KNOWLEDGE_SECTIONS = [
+  ['about', 'About you and your studio'],
+  ['included', "What's included in the website"],
+  ['pricing', 'Pricing and payment'],
+  ['timeline', 'How fast it goes live'],
+  ['process', 'What happens after they say yes'],
+  ['guarantee', 'Changes, ownership and guarantees'],
+  ['proof', 'Past work and results (all true)'],
+  ['faq', 'Other questions owners ask, with answers'],
+  ['close', 'What to aim for at the end of the call'],
+];
+
+// The owner's questionnaire answers, as a prompt section.
+export function knowledgeText(seller) {
+  const k = seller.knowledge || {};
+  const parts = KNOWLEDGE_SECTIONS.filter(([key]) => k[key]?.trim()).map(([key, title]) => `## ${title}\n${k[key].trim()}`);
+  if (k.never?.trim()) parts.push(`## Never say or promise this\n${k.never.trim()}`);
+  return parts.length ? parts.join('\n\n').slice(0, 8000) : 'Nothing extra yet.';
+}
+
 // Values for every {{placeholder}} in prompts/sales-agent.md. ElevenLabs gets them as
 // dynamic variables; the OpenAI bridge fills them in itself.
 export function promptVariables(lead, seller) {
@@ -18,6 +38,7 @@ export function promptVariables(lead, seller) {
     your_name: seller.yourName || 'our team',
     your_company: seller.company || 'our studio',
     offer_phrase: seller.price ? ` (${seller.price})` : '',
+    business_knowledge: knowledgeText(seller),
     price_answer: seller.price
       ? `It's ${seller.price}. Say it simply, then point out the preview is free to look at first.`
       : `Say ${seller.yourName || 'the team'} will go over pricing personally, it depends on what they need, and the preview is free.`,

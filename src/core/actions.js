@@ -170,7 +170,8 @@ export async function analyzeCall(config, lead, transcript, endReason) {
           content: `You review sales calls offering a website redesign to ${lead.business_name}. Reply with JSON only: ` +
             `{"outcome": one of ${JSON.stringify(OUTCOMES)}, "summary": "2-3 sentences for the salesperson", ` +
             '"meeting_time": "agreed follow-up time or empty", "email": "email they gave or empty", ' +
-            '"decision_maker_name": "owner/decision maker name or empty", "next_step": "what the salesperson should do next"}. ' +
+            '"decision_maker_name": "owner/decision maker name or empty", "next_step": "what the salesperson should do next", ' +
+            '"requests": "changes they want, questions the AI could not answer, and anything promised to them, or empty"}. ' +
             'Use "link_sent" if they agreed to receive the preview, "sold" only if they clearly agreed to buy.',
         },
         { role: 'user', content: text },

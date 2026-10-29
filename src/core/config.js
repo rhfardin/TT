@@ -40,6 +40,18 @@ export function buildConfig(e) {
       price: env('OFFER_PRICE', ''),
       bookingLink: env('BOOKING_LINK', ''),
       paymentLink: env('PAYMENT_LINK', ''),
+      knowledge: {
+        about: env('KB_ABOUT'),
+        included: env('KB_INCLUDED'),
+        pricing: env('KB_PRICING'),
+        timeline: env('KB_TIMELINE'),
+        process: env('KB_PROCESS'),
+        guarantee: env('KB_GUARANTEE'),
+        proof: env('KB_PROOF'),
+        faq: env('KB_FAQ'),
+        never: env('KB_NEVER'),
+        close: env('KB_CLOSE'),
+      },
     },
 
     calling: {

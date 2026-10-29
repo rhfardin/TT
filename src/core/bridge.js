@@ -234,6 +234,7 @@ export class CallBridge {
         email: analysis.email || null,
         decision_maker_name: analysis.decision_maker_name || null,
         next_step: analysis.next_step || null,
+        requests: analysis.requests || null,
       },
       duration,
     });
