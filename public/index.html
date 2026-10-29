@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Caller</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #16181d; --muted: #667085; --line: #e4e7ec;
+    --accent: #3b5bdb; --accent-text: #fff; --good: #2b8a3e; --warn: #c77800; --bad: #c92a2a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111317; --panel: #1a1d23; --text: #e9ebef; --muted: #98a2b3; --line: #2b2f37; --accent: #748ffc; --accent-text: #0b0d12; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; flex: 1; }
+  main { padding: 16px 20px; max-width: 1400px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  button, .btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 7px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  input, select, textarea { font: inherit; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--text); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .muted { color: var(--muted); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; border: 1px solid var(--line); white-space: nowrap; }
+  .pill.won, .pill.interested { color: var(--good); border-color: var(--good); }
+  .pill.callback, .pill.calling, .pill.queued { color: var(--warn); border-color: var(--warn); }
+  .pill.dnc, .pill.failed, .pill.not_interested { color: var(--bad); border-color: var(--bad); }
+  .ok { color: var(--good); } .no { color: var(--bad); }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  tr.clickable:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); cursor: pointer; }
+  a { color: var(--accent); }
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; }
+  #drawer { position: fixed; inset: 0 0 0 auto; width: min(620px, 100%); background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 18px 20px; transform: translateX(100%); transition: transform .2s; box-shadow: -8px 0 30px rgba(0,0,0,.15); }
+  #drawer.open { transform: none; }
+  .bubble { padding: 7px 10px; border-radius: 9px; margin: 5px 0; max-width: 88%; }
+  .bubble.agent { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .bubble.user { background: color-mix(in srgb, var(--text) 7%, transparent); margin-left: auto; }
+  #login { max-width: 340px; margin: 12vh auto; }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 8px; display: none; max-width: 90vw; }
+  dl { display: grid; grid-template-columns: 120px 1fr; gap: 4px 10px; margin: 0; }
+  dt { color: var(--muted); } dd { margin: 0; word-break: break-word; }
+  @media (max-width: 700px) { .hide-sm { display: none; } main { padding: 12px; } }
+</style>
+</head>
+<body>
+<div id="login" class="card" hidden>
+  <h2 style="margin-top:0">AI Caller</h2>
+  <form id="loginForm" class="row">
+    <input type="password" id="password" placeholder="Password" style="flex:1" autofocus>
+    <button class="primary">Log in</button>
+  </form>
+  <p id="loginErr" class="no"></p>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <h1>AI Caller</h1>
+    <span id="providerInfo" class="muted"></span>
+    <button id="logout">Log out</button>
+  </header>
+  <main>
+    <div class="card" id="setup"></div>
+
+    <div class="card">
+      <div class="row">
+        <strong>Import businesses</strong>
+        <input type="file" id="file" accept=".xlsx,.csv">
+        <button id="uploadBtn" class="primary">Upload sheet</button>
+        <span id="importResult" class="muted"></span>
+      </div>
+      <p class="muted" style="margin:8px 0 0">First row must be headers. Recognized: business name, phone, owner/contact, email, website, redesign/demo link, category, city, timezone, notes. Re-uploading updates existing rows by phone number.</p>
+    </div>
+
+    <div class="card">
+      <div class="row" style="margin-bottom:10px">
+        <input id="q" placeholder="Search name, phone, city" style="min-width:200px">
+        <select id="statusFilter"><option value="">All statuses</option></select>
+        <select id="categoryFilter"><option value="">All categories</option></select>
+        <span style="flex:1"></span>
+        <label class="row" style="gap:5px"><input type="checkbox" id="ignoreWindow"> Ignore calling hours</label>
+        <button id="callSelected" class="primary" disabled>Call selected (0)</button>
+        <button id="clearQueue">Stop queue</button>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div id="queueInfo" class="muted" style="margin-top:6px"></div>
+      <div class="table-wrap" style="margin-top:10px">
+        <table>
+          <thead><tr>
+            <th><input type="checkbox" id="selectAll"></th>
+            <th>Business</th><th class="hide-sm">Category</th><th>Phone</th><th>Status</th>
+            <th class="hide-sm">Tries</th><th class="hide-sm">Last result</th><th></th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<aside id="drawer"></aside>
+<div id="toast"></div>
+
+<script>
+const STATUSES = ['new','queued','calling','no_answer','voicemail','callback','interested','won','not_interested','completed','failed','dnc'];
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const selected = new Set();
+let leads = [];
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}, ...opts });
+  if (res.status === 401 && path !== '/api/login') { showLogin(); throw new Error('login required'); }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 4500);
+}
+function showLogin() { $('#login').hidden = false; $('#app').hidden = true; }
+
+$('#loginForm').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/login', { method: 'POST', body: JSON.stringify({ password: $('#password').value }) });
+    start();
+  } catch (err) { $('#loginErr').textContent = err.message; }
+};
+$('#logout').onclick = async () => { await api('/api/logout', { method: 'POST' }); showLogin(); };
+
+for (const s of STATUSES) $('#statusFilter').insertAdjacentHTML('beforeend', `<option>${s}</option>`);
+
+async function loadStatus() {
+  const s = await api('/api/status');
+  const c = s.configured;
+  const mark = (b) => b ? '<span class="ok">✓</span>' : '<span class="no">✗</span>';
+  $('#providerInfo').textContent = `Voice: ${s.provider === 'elevenlabs' ? 'ElevenLabs' : 'OpenAI Realtime'}`;
+  const voiceOk = s.provider === 'elevenlabs' ? c.elevenlabs : c.openai;
+  const lines = [
+    `${mark(voiceOk)} Calling (${s.provider})`,
+    s.provider === 'elevenlabs' ? `${mark(c.webhookSecret)} Webhook secret` : '',
+    `${mark(c.email)} Email follow-up`,
+    `${mark(c.sms)} SMS`,
+    `Calling hours: ${s.calling.windowStartHour}:00–${s.calling.windowEndHour}:00 (lead's timezone, default ${s.calling.defaultTimezone}) · ${s.calling.spacingSeconds}s between queued calls · max ${s.calling.maxAttempts} tries`,
+  ].filter(Boolean);
+  let extra = '';
+  if (s.provider === 'elevenlabs') {
+    extra = `<div class="muted" style="margin-top:6px">ElevenLabs post-call webhook: <code>${esc(s.webhookUrl)}</code> · tools: <code>${esc(s.toolUrls.sendDemoLink)}</code>, <code>${esc(s.toolUrls.doNotCall)}</code></div>`;
+  }
+  $('#setup').innerHTML = `<div class="row">${lines.map((l) => `<span>${l}</span>`).join('<span class="muted">·</span>')}</div>${extra}`;
+  $('#stats').innerHTML = s.counts.map((r) => `<span class="pill ${r.status}">${r.status}: ${r.n}</span>`).join('');
+  const q = s.queue;
+  $('#queueInfo').textContent = q.pending.length || q.running ? `Queue: ${q.pending.length} waiting${q.running ? ', calling now' : ''}` : '';
+}
+
+async function loadLeads() {
+  const params = new URLSearchParams({ q: $('#q').value, status: $('#statusFilter').value, category: $('#categoryFilter').value });
+  const data = await api('/api/leads?' + params);
+  leads = data.leads;
+  const cat = $('#categoryFilter'), cur = cat.value;
+  cat.innerHTML = '<option value="">All categories</option>' + data.categories.map((c) => `<option ${c === cur ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  render();
+}
+
+function render() {
+  $('#rows').innerHTML = leads.map((l) => `
+    <tr class="clickable" data-id="${l.id}">
+      <td><input type="checkbox" class="sel" data-id="${l.id}" ${selected.has(l.id) ? 'checked' : ''}></td>
+      <td><strong>${esc(l.business_name)}</strong>${l.contact_name ? `<div class="muted">${esc(l.contact_name)}</div>` : ''}</td>
+      <td class="hide-sm">${esc(l.category)}</td>
+      <td>${esc(l.phone)}${l.callable_now.ok ? '' : `<div class="muted" title="${esc(l.callable_now.reason)}">outside hours</div>`}</td>
+      <td><span class="pill ${l.status}">${l.status}</span></td>
+      <td class="hide-sm">${l.attempts}</td>
+      <td class="hide-sm muted" style="max-width:320px">${esc((l.last_summary || '').slice(0, 140))}</td>
+      <td><button data-call="${l.id}">Call</button></td>
+    </tr>`).join('') || '<tr><td colspan="8" class="muted">No businesses yet. Upload your sheet above.</td></tr>';
+  $('#callSelected').textContent = `Call selected (${selected.size})`;
+  $('#callSelected').disabled = !selected.size;
+}
+
+$('#rows').onclick = async (e) => {
+  const callId = e.target.dataset.call;
+  if (callId) return callOne(Number(callId), e.target);
+  if (e.target.closest('.sel') || e.target.closest('td:first-child')) return; // handled by onchange
+  const tr = e.target.closest('tr[data-id]');
+  if (tr) openLead(Number(tr.dataset.id));
+};
+$('#rows').onchange = (e) => {
+  if (!e.target.classList.contains('sel')) return;
+  const id = Number(e.target.dataset.id);
+  e.target.checked ? selected.add(id) : selected.delete(id);
+  render();
+};
+$('#selectAll').onchange = (e) => { for (const l of leads) e.target.checked ? selected.add(l.id) : selected.delete(l.id); render(); };
+
+async function callOne(id, btn) {
+  const lead = leads.find((l) => l.id === id);
+  if (!confirm(`Call ${lead?.business_name} at ${lead?.phone} now?`)) return;
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/api/leads/${id}/call`, { method: 'POST', body: JSON.stringify({ ignoreWindow: $('#ignoreWindow').checked }) });
+    toast('Calling…');
+  } catch (err) { toast('Not called: ' + err.message); }
+  refresh();
+}
+
+$('#callSelected').onclick = async () => {
+  if (!confirm(`Queue ${selected.size} calls? They will be placed one after another.`)) return;
+  const r = await api('/api/call-batch', { method: 'POST', body: JSON.stringify({ ids: [...selected], ignoreWindow: $('#ignoreWindow').checked }) });
+  const queued = r.results.filter((x) => x.queued).length;
+  const skipped = r.results.filter((x) => !x.queued);
+  toast(`${queued} queued${skipped.length ? `, ${skipped.length} skipped (${skipped[0].reason})` : ''}`);
+  selected.clear();
+  refresh();
+};
+$('#clearQueue').onclick = async () => { await api('/api/queue/clear', { method: 'POST' }); toast('Queue cleared (calls in progress continue)'); refresh(); };
+
+$('#uploadBtn').onclick = async () => {
+  const f = $('#file').files[0];
+  if (!f) return toast('Pick a .xlsx or .csv file first');
+  const fd = new FormData(); fd.append('file', f);
+  try {
+    const r = await api('/api/import', { method: 'POST', body: fd });
+    $('#importResult').textContent = `Imported ${r.imported}, skipped ${r.skipped.length}. Columns used: ` +
+      Object.entries(r.mapping).map(([k, v]) => `${k}←"${v}"`).join(', ');
+    refresh();
+  } catch (err) { $('#importResult').textContent = err.message; }
+};
+
+let searchT;
+$('#q').oninput = () => { clearTimeout(searchT); searchT = setTimeout(loadLeads, 250); };
+$('#statusFilter').onchange = loadLeads;
+$('#categoryFilter').onchange = loadLeads;
+
+async function openLead(id) {
+  const { lead, calls, events } = await api(`/api/leads/${id}`);
+  const link = (u) => u ? `<a href="${esc(/^https?:/.test(u) ? u : 'https://' + u)}" target="_blank" rel="noopener">${esc(u)}</a>` : '';
+  $('#drawer').innerHTML = `
+    <div class="row"><h2 style="margin:0;flex:1">${esc(lead.business_name)}</h2><button id="closeDrawer">Close</button></div>
+    <dl style="margin-top:12px">
+      <dt>Contact</dt><dd>${esc(lead.contact_name)}</dd>
+      <dt>Phone</dt><dd>${esc(lead.phone)}</dd>
+      <dt>Email</dt><dd>${esc(lead.email)}</dd>
+      <dt>Website</dt><dd>${link(lead.website)}</dd>
+      <dt>Redesign</dt><dd>${link(lead.demo_link)}</dd>
+      <dt>Category</dt><dd>${esc(lead.category)}</dd>
+      <dt>City</dt><dd>${esc(lead.city)}</dd>
+      <dt>Follow-up</dt><dd>${esc(lead.meeting_time)}</dd>
+      <dt>Notes</dt><dd>${esc(lead.notes)}</dd>
+    </dl>
+    <div class="row" style="margin:14px 0">
+      <select id="leadStatus">${STATUSES.map((s) => `<option ${s === lead.status ? 'selected' : ''}>${s}</option>`).join('')}</select>
+      <button id="saveStatus">Set status</button>
+      <button id="resetTries">Reset tries</button>
+      <button class="primary" id="drawerCall">Call now</button>
+      <button id="deleteLead" style="margin-left:auto">Delete</button>
+    </div>
+    <h3>Calls</h3>
+    ${calls.map((c) => `
+      <div class="card">
+        <div class="row"><strong>${esc(c.created_at)} UTC</strong><span class="pill">${esc(c.status)}</span>
+          ${c.outcome?.outcome ? `<span class="pill ${esc(c.outcome.outcome)}">${esc(c.outcome.outcome)}</span>` : ''}
+          ${c.duration_secs ? `<span class="muted">${c.duration_secs}s</span>` : ''}</div>
+        ${c.error ? `<p class="no">${esc(c.error)}</p>` : ''}
+        ${c.summary ? `<p>${esc(c.summary)}</p>` : ''}
+        ${c.outcome?.next_step ? `<p><strong>Next step:</strong> ${esc(c.outcome.next_step)}</p>` : ''}
+        ${c.transcript.length ? `<details><summary>Transcript</summary>${c.transcript.map((t) => `<div class="bubble ${t.role}">${esc(t.message)}</div>`).join('')}</details>` : ''}
+      </div>`).join('') || '<p class="muted">No calls yet.</p>'}
+    <h3>Activity</h3>
+    ${events.map((e) => `<div class="muted">${esc(e.created_at)} · ${esc(e.kind)} ${esc(e.detail && e.detail !== 'null' ? e.detail : '')}</div>`).join('')}
+  `;
+  $('#drawer').classList.add('open');
+  $('#closeDrawer').onclick = () => $('#drawer').classList.remove('open');
+  $('#saveStatus').onclick = async () => { await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ status: $('#leadStatus').value }) }); toast('Saved'); refresh(); openLead(id); };
+  $('#resetTries').onclick = async () => { await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ attempts: 0 }) }); toast('Tries reset'); refresh(); openLead(id); };
+  $('#drawerCall').onclick = () => callOne(id).then(() => openLead(id));
+  $('#deleteLead').onclick = async () => {
+    if (!confirm('Delete this business and its call history?')) return;
+    await api(`/api/leads/${id}`, { method: 'DELETE' });
+    $('#drawer').classList.remove('open'); refresh();
+  };
+}
+
+function refresh() { return Promise.all([loadStatus(), loadLeads()]).catch(() => {}); }
+
+async function start() {
+  $('#login').hidden = true; $('#app').hidden = false;
+  await refresh();
+}
+api('/api/status').then(start).catch(() => showLogin());
+setInterval(() => { if (!$('#app').hidden) refresh(); }, 10000);
+</script>
+</body>
+</html>
