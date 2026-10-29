@@ -34,12 +34,17 @@ Calls to small businesses are short. Most are unanswered or last under a minute,
 
 ## Setup
 
+Three ways to host it. Pick one:
+- **Cloudflare Workers**: free hosting, always on, your domain. See [Deploy on Cloudflare](#2c-deploy-on-cloudflare-free).
+- **Your own computer**: free; it runs only while you're calling.
+- **A VPS with Docker**: about $5/month.
+
 ### 1. Accounts you need
 1. **Twilio**: buy a local phone number. Copy the Account SID, Auth Token and number.
 2. **OpenAI**: create an API key at platform.openai.com and add credit. *(or ElevenLabs, see below)*
-3. **Email (recommended)**: SMTP login for the address the follow-up comes from. For Gmail, use an [app password](https://support.google.com/accounts/answer/185833).
+3. **Email (recommended)**: a free [Resend](https://resend.com) account (verify your domain there, then use `RESEND_API_KEY`), or an SMTP login (Node only; for Gmail use an [app password](https://support.google.com/accounts/answer/185833)).
 
-### 2. Run it on your server (any VPS with Docker: DigitalOcean, Hetzner, Lightsail…)
+### 2a. Run it on a server (any VPS with Docker: DigitalOcean, Hetzner, Lightsail…)
 ```bash
 git clone <this repo> ai-caller && cd ai-caller
 cp .env.example .env      # fill in your values
@@ -47,11 +52,11 @@ docker compose up -d --build
 ```
 Point your domain's DNS **A record** (for example `calls.yourdomain.com`) to the server's IP. Caddy gets the HTTPS certificate automatically. Then open `https://calls.yourdomain.com` and log in with `ADMIN_PASSWORD`.
 
-> HTTPS on a real domain is required: Twilio streams the call audio to `wss://<your domain>/media-stream`.
+> HTTPS on a real domain is required: Twilio streams the call audio to `wss://<your domain>/media-stream/<call id>`.
 
 Without Docker: Node 22.13 or newer, then `npm ci && npm start`, behind any reverse proxy that supports WebSockets.
 
-### Or: run it from your own computer (free)
+### 2b. Or run it from your own computer (free)
 No server needed; it only has to be running while you make calls. Cloudflare Tunnel (free) gives your computer a public HTTPS address that Twilio can reach.
 
 1. Install [Node.js 22](https://nodejs.org) (LTS) and [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/).
@@ -65,8 +70,33 @@ No server needed; it only has to be running while you make calls. Cloudflare Tun
 
 The quick tunnel address changes every time you start `cloudflared`, so update `PUBLIC_URL` and restart the app each time. For a fixed address on your own domain (for example `calls.yourdomain.com`, with the domain on Cloudflare), create a [named tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-local-tunnel/) once and use that instead. Your leads and call history stay on your computer in `data/`. Keep the computer awake while calls run.
 
+### 2c. Deploy on Cloudflare (free)
+This runs on the Workers **Free** plan: a Worker for the website and API, D1 for the database, and Durable Objects for live calls and the call queue. You only pay OpenAI and Twilio for the calls themselves.
+
+You need [Node.js 22](https://nodejs.org) on your computer to deploy, plus a free Cloudflare account. Email has to use Resend here, because Workers can't use SMTP.
+
+```bash
+npm ci
+npx wrangler login
+npx wrangler d1 create ai-caller        # copy the database_id it prints into wrangler.jsonc
+```
+1. Edit the `vars` section of `wrangler.jsonc` with your settings: your name, company, price, links, `EMAIL_FROM`, `TWILIO_FROM_NUMBER`, calling hours.
+2. Add the secrets. Each command asks for the value:
+   ```bash
+   npx wrangler secret put ADMIN_PASSWORD
+   npx wrangler secret put OPENAI_API_KEY
+   npx wrangler secret put TWILIO_ACCOUNT_SID
+   npx wrangler secret put TWILIO_AUTH_TOKEN
+   npx wrangler secret put RESEND_API_KEY
+   ```
+   (For ElevenLabs instead: `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID`, `ELEVENLABS_PHONE_NUMBER_ID`, `ELEVENLABS_WEBHOOK_SECRET`, `TOOL_SECRET`, and set `VOICE_PROVIDER` to `elevenlabs`.)
+3. Deploy with `npm run cf:deploy`. You get a `https://ai-caller.<you>.workers.dev` address that works right away.
+4. **Your domain** (optional): Cloudflare dashboard → Workers & Pages → ai-caller → Settings → Domains & Routes → add `calls.yourdomain.com`. The domain must be on Cloudflare. Then add `"PUBLIC_URL": "https://calls.yourdomain.com"` to `vars` and deploy again.
+
+Free plan limits are far above what calling needs: 100,000 requests a day, and Durable Objects and D1 are included. To change the sales script, edit `prompts/sales-agent.md` and run `npm run cf:deploy` again. Cloudflare Pages alone can't run this, because it only serves static files. This setup uses Workers, which also serves the dashboard.
+
 ### 3. First test
-Add yourself as a row in the sheet (with your own phone number), upload it, and press **Call**. Listen to how it pitches, then adjust `prompts/sales-agent.md` and `.env` (voice, price, links). Restart with `docker compose restart app`.
+Add yourself as a row in the sheet (with your own phone number), upload it, and press **Call**. Listen to how it pitches, then adjust `prompts/sales-agent.md` and `.env` (voice, price, links). On Docker, restart with `docker compose restart app`. Locally, the next call picks up the changes.
 
 ### Using ElevenLabs instead
 1. ElevenLabs → Agents → **Phone Numbers** → import your Twilio number. Copy its ID to `ELEVENLABS_PHONE_NUMBER_ID`.
@@ -94,14 +124,16 @@ This makes calls with an AI voice, and phone rules are strict about that. In the
 ## Project layout
 
 ```
-src/server.js         web server, dashboard API, webhooks
-src/importer.js       Excel/CSV import + column detection
-src/caller.js         placing calls, calling hours, queue
-src/openai-bridge.js  Twilio phone audio <-> OpenAI Realtime voice
-src/tools.js          what the AI can do mid-call (send link, do-not-call)
-src/results.js        saving outcomes to the lead
-src/webhooks.js       ElevenLabs post-call webhook
+src/core/             all calling logic, shared by both versions
+  leads.js            sheet columns → leads, phone numbers, calling hours
+  agent.js            AI tools, outcomes, follow-up message
+  actions.js          placing calls, mid-call tools, results, ElevenLabs webhook
+  bridge.js           Twilio phone audio <-> OpenAI Realtime voice
+  api.js              dashboard API
+  store.js            database queries (SQLite on Node, D1 on Cloudflare)
+src/server.js         Node server (Docker / VPS / your computer)
+worker/index.js       Cloudflare Worker + Durable Objects
+wrangler.jsonc        Cloudflare settings
 prompts/sales-agent.md  the sales script (edit this!)
-public/index.html     dashboard
-data/caller.db        your leads + call history (SQLite, back it up)
+public/index.html     dashboard (reads your Excel file in the browser)
 ```

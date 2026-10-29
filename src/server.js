@@ -1,178 +1,126 @@
+// Node.js server (VPS / Docker / your own computer). The Cloudflare version lives in worker/.
 import express from 'express';
-import multer from 'multer';
-import cookieParser from 'cookie-parser';
-import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { config } from './config.js';
-import { db, getLead, updateLead, logEvent } from './db.js';
-import { importSpreadsheet } from './importer.js';
-import { placeCall, enqueue, queueState, clearQueue, canCallNow } from './caller.js';
-import { verifySignature, handlePostCall } from './webhooks.js';
-import { sendDemoLink, markDoNotCall } from './tools.js';
-import { attachOpenAIBridge } from './openai-bridge.js';
-import { validTwilioSignature } from './twilio.js';
-import { recordNotConnected } from './results.js';
+import { DatabaseSync } from 'node:sqlite';
+import nodemailer from 'nodemailer';
+import { WebSocketServer, WebSocket } from 'ws';
+import { buildConfig } from './core/config.js';
+import { SCHEMA } from './core/schema.js';
+import { createStore } from './core/store.js';
+import { handleRequest } from './core/api.js';
+import { prepareBatch, runQueued, releaseQueued } from './core/queue.js';
+import { recordNotConnected, verifyElevenLabsSignature, handleElevenLabsWebhook } from './core/actions.js';
+import { validTwilioSignature } from './core/twilio.js';
+import { resendSender, textToHtml } from './core/email.js';
+import { CallBridge } from './core/bridge.js';
 
+const config = buildConfig(process.env);
 if (!config.adminPassword) {
   console.error('ADMIN_PASSWORD must be set.');
   process.exit(1);
 }
+const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const promptTemplate = () => fs.readFileSync(path.join(root, 'prompts', 'sales-agent.md'), 'utf8');
 
+// ---- Database (SQLite file in DATA_DIR) ----
+fs.mkdirSync(config.dataDir, { recursive: true });
+const sqlite = new DatabaseSync(path.join(config.dataDir, 'caller.db'));
+sqlite.exec('PRAGMA journal_mode = WAL');
+for (const stmt of SCHEMA) sqlite.exec(stmt);
+const store = createStore({
+  all: async (sql, ...args) => sqlite.prepare(sql).all(...args),
+  get: async (sql, ...args) => sqlite.prepare(sql).get(...args) ?? null,
+  run: async (sql, ...args) => ({ lastId: Number(sqlite.prepare(sql).run(...args).lastInsertRowid) }),
+});
+
+// ---- Email: SMTP if configured, otherwise Resend ----
+function smtpSender() {
+  const { smtp, from } = config.email;
+  if (!smtp.host) return null;
+  const transport = nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.port === 465,
+    auth: smtp.user ? { user: smtp.user, pass: smtp.pass } : undefined,
+  });
+  return (to, subject, text) => transport.sendMail({ from: from || smtp.user, to, subject, text, html: textToHtml(text) });
+}
+
+const ctx = { config, store, sendEmail: smtpSender() || resendSender(config.email) };
+
+// ---- In-memory call queue: calls go out one at a time ----
+const pending = [];
+let running = false;
+ctx.queue = {
+  async enqueue(ids, opts) {
+    const { results, accepted } = await prepareBatch(ctx, ids, opts, pending.map((p) => p.id));
+    pending.push(...accepted);
+    drain();
+    return results;
+  },
+  state: async () => ({ running, pending: pending.map((p) => p.id) }),
+  clear: () => releaseQueued(ctx, pending.splice(0)),
+};
+async function drain() {
+  if (running) return;
+  running = true;
+  try {
+    while (pending.length) {
+      const placed = await runQueued(ctx, pending.shift());
+      if (placed && pending.length) await new Promise((r) => setTimeout(r, config.calling.spacingSeconds * 1000));
+    }
+  } finally {
+    running = false;
+  }
+}
+
+// If a call's result never arrives, don't leave the lead stuck in "calling".
+setInterval(() => store.releaseStuckCalls(new Date(Date.now() - 30 * 60 * 1000).toISOString()), 5 * 60 * 1000).unref();
+
+// ---- HTTP ----
 const app = express();
 app.set('trust proxy', 1);
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-// ---- Webhooks from ElevenLabs (raw body needed for the signature) ----
-app.post('/webhooks/elevenlabs', express.raw({ type: '*/*', limit: '25mb' }), (req, res) => {
+app.post('/webhooks/elevenlabs', express.raw({ type: '*/*', limit: '25mb' }), async (req, res) => {
   const raw = req.body.toString('utf8');
-  if (!verifySignature(raw, req.get('elevenlabs-signature'))) return res.status(401).send('bad signature');
+  if (!(await verifyElevenLabsSignature(config, raw, req.get('elevenlabs-signature')))) return res.status(401).send('bad signature');
   try {
-    handlePostCall(JSON.parse(raw));
+    await handleElevenLabsWebhook(ctx, JSON.parse(raw));
   } catch (err) {
     console.error('webhook error', err);
-    logEvent(null, 'webhook_error', String(err));
   }
   res.sendStatus(200);
 });
 
-// ---- Twilio call status (OpenAI provider): catches calls that never connected ----
-app.post('/twilio/status', express.urlencoded({ extended: false }), (req, res) => {
+// Twilio call status (OpenAI provider): catches calls that never connected.
+app.post('/twilio/status', express.urlencoded({ extended: false }), async (req, res) => {
   const url = `${config.publicUrl}${req.originalUrl}`;
-  if (!validTwilioSignature(url, req.body, req.get('x-twilio-signature'))) return res.status(403).send('bad signature');
-  const callId = Number(req.query.call);
-  const status = req.body.CallStatus;
-  if (['no-answer', 'busy', 'failed', 'canceled'].includes(status)) recordNotConnected(callId, status);
+  if (!(await validTwilioSignature(config.twilio, url, req.body, req.get('x-twilio-signature')))) {
+    return res.status(403).send('bad signature');
+  }
+  if (['no-answer', 'busy', 'failed', 'canceled'].includes(req.body.CallStatus)) {
+    await recordNotConnected(ctx, Number(req.query.call), req.body.CallStatus);
+  }
   res.type('text/xml').send('<Response/>');
 });
 
-app.use(express.json({ limit: '1mb' }));
-app.use(cookieParser());
-
-// ---- Server tools the AI agent calls mid-conversation ----
-function toolAuth(req, res, next) {
-  const given = req.get('x-tool-secret') || '';
-  const ok = config.toolSecret && given.length === config.toolSecret.length &&
-    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(config.toolSecret));
-  if (!ok) return res.status(401).json({ ok: false, message: 'unauthorized' });
-  next();
-}
-app.post('/tools/send-demo-link', toolAuth, async (req, res) => {
+app.use(['/api', '/tools'], express.json({ limit: '20mb' }), async (req, res) => {
   try {
-    res.json(await sendDemoLink(req.body || {}));
+    const r = await handleRequest(ctx, {
+      method: req.method,
+      path: req.originalUrl.split('?')[0],
+      query: req.query,
+      body: req.body,
+      headers: { cookie: req.get('cookie'), 'x-tool-secret': req.get('x-tool-secret') },
+    });
+    res.set(r.headers || {}).status(r.status).json(r.json);
   } catch (err) {
     console.error(err);
-    res.json({ ok: false, message: 'Sending failed. Tell them the team will email it over shortly.' });
+    res.status(500).json({ error: err.message });
   }
 });
-app.post('/tools/do-not-call', toolAuth, (req, res) => res.json(markDoNotCall(req.body || {})));
-
-// ---- Dashboard auth ----
-const sessionToken = crypto.createHmac('sha256', config.adminPassword).update('dashboard-session').digest('hex');
-app.post('/api/login', (req, res) => {
-  const pw = String(req.body?.password ?? '');
-  const ok = pw.length === config.adminPassword.length &&
-    crypto.timingSafeEqual(Buffer.from(pw), Buffer.from(config.adminPassword));
-  if (!ok) return res.status(401).json({ error: 'Wrong password' });
-  res.cookie('session', sessionToken, {
-    httpOnly: true, sameSite: 'strict', secure: config.publicUrl.startsWith('https'), maxAge: 30 * 864e5,
-  });
-  res.json({ ok: true });
-});
-app.post('/api/logout', (req, res) => { res.clearCookie('session'); res.json({ ok: true }); });
-app.use('/api', (req, res, next) => {
-  if (req.cookies.session !== sessionToken) return res.status(401).json({ error: 'login required' });
-  next();
-});
-
-// ---- Dashboard API ----
-app.get('/api/status', (req, res) => {
-  const el = config.elevenlabs;
-  res.json({
-    provider: config.voiceProvider,
-    configured: {
-      openai: Boolean(config.openai.apiKey && config.twilio.accountSid && config.twilio.fromNumber),
-      elevenlabs: Boolean(el.apiKey && el.agentId && el.phoneNumberId),
-      webhookSecret: Boolean(el.webhookSecret),
-      toolSecret: Boolean(config.toolSecret),
-      email: Boolean(config.smtp.host),
-      sms: Boolean(config.twilio.accountSid && config.twilio.fromNumber),
-    },
-    calling: config.calling,
-    queue: queueState(),
-    webhookUrl: `${config.publicUrl}/webhooks/elevenlabs`,
-    toolUrls: {
-      sendDemoLink: `${config.publicUrl}/tools/send-demo-link`,
-      doNotCall: `${config.publicUrl}/tools/do-not-call`,
-    },
-    counts: db.prepare('SELECT status, COUNT(*) AS n FROM leads GROUP BY status').all(),
-  });
-});
-
-app.post('/api/import', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  try {
-    res.json(await importSpreadsheet(req.file.buffer, req.file.originalname));
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-app.get('/api/leads', (req, res) => {
-  const { status, q, category } = req.query;
-  const where = [];
-  const args = [];
-  if (status) { where.push('status = ?'); args.push(status); }
-  if (category) { where.push('category = ?'); args.push(category); }
-  if (q) {
-    where.push('(business_name LIKE ? OR contact_name LIKE ? OR phone LIKE ? OR city LIKE ?)');
-    args.push(...Array(4).fill(`%${q}%`));
-  }
-  const leads = db.prepare(`SELECT * FROM leads ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-                            ORDER BY id DESC LIMIT 2000`).all(...args);
-  for (const l of leads) l.callable_now = canCallNow(l);
-  const categories = db.prepare('SELECT DISTINCT category FROM leads WHERE category IS NOT NULL ORDER BY category').all()
-    .map((r) => r.category);
-  res.json({ leads, categories });
-});
-
-app.get('/api/leads/:id', (req, res) => {
-  const lead = getLead(req.params.id);
-  if (!lead) return res.status(404).json({ error: 'not found' });
-  const calls = db.prepare('SELECT * FROM calls WHERE lead_id = ? ORDER BY id DESC').all(lead.id)
-    .map((c) => ({ ...c, transcript: JSON.parse(c.transcript || '[]'), outcome: JSON.parse(c.outcome || 'null') }));
-  const events = db.prepare('SELECT * FROM events WHERE lead_id = ? ORDER BY id DESC LIMIT 50').all(lead.id);
-  res.json({ lead, calls, events });
-});
-
-const EDITABLE = ['business_name', 'contact_name', 'phone', 'email', 'website', 'demo_link', 'category', 'city',
-  'timezone', 'notes', 'status', 'attempts', 'meeting_time'];
-app.patch('/api/leads/:id', (req, res) => {
-  const fields = Object.fromEntries(Object.entries(req.body || {}).filter(([k]) => EDITABLE.includes(k)));
-  updateLead(req.params.id, fields);
-  res.json(getLead(req.params.id));
-});
-
-app.delete('/api/leads/:id', (req, res) => {
-  db.prepare('DELETE FROM events WHERE lead_id = ?').run(Number(req.params.id));
-  db.prepare('DELETE FROM calls WHERE lead_id = ?').run(Number(req.params.id));
-  db.prepare('DELETE FROM leads WHERE id = ?').run(Number(req.params.id));
-  res.json({ ok: true });
-});
-
-// Call one lead right now.
-app.post('/api/leads/:id/call', async (req, res) => {
-  const r = await placeCall(req.params.id, { ignoreWindow: Boolean(req.body?.ignoreWindow) });
-  res.status(r.ok ? 200 : 400).json(r);
-});
-
-// Queue several leads; they are called one after another.
-app.post('/api/call-batch', (req, res) => {
-  const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
-  res.json({ results: enqueue(ids, { ignoreWindow: Boolean(req.body?.ignoreWindow) }) });
-});
-app.post('/api/queue/clear', (req, res) => { clearQueue(); res.json(queueState()); });
 
 app.get('/healthz', (req, res) => res.send('ok'));
 app.use(express.static(path.join(root, 'public')));
@@ -180,4 +128,25 @@ app.use(express.static(path.join(root, 'public')));
 const server = app.listen(config.port, () => {
   console.log(`AI caller running on port ${config.port} (public URL ${config.publicUrl}, voice: ${config.voiceProvider})`);
 });
-attachOpenAIBridge(server);
+
+// ---- Twilio media streams → OpenAI Realtime ----
+const wss = new WebSocketServer({ noServer: true });
+server.on('upgrade', (req, socket, head) => {
+  if (!req.url.startsWith('/media-stream')) return socket.destroy();
+  wss.handleUpgrade(req, socket, head, (twilioWs) => {
+    const bridge = new CallBridge(ctx, promptTemplate(), {
+      sendTwilio: (text) => twilioWs.readyState === WebSocket.OPEN && twilioWs.send(text),
+      closeTwilio: () => twilioWs.close(),
+      connectOpenAI: (url, apiKey, handlers) => new Promise((resolve, reject) => {
+        const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+        ws.on('open', () => resolve({ send: (t) => ws.send(t), close: () => ws.close(), isOpen: () => ws.readyState === WebSocket.OPEN }));
+        ws.on('message', (data) => handlers.onMessage(data.toString()));
+        ws.on('close', handlers.onClose);
+        ws.on('error', (err) => { handlers.onError(err); reject(err); });
+      }),
+    });
+    twilioWs.on('message', (data) => bridge.onTwilioMessage(data.toString()));
+    twilioWs.on('close', () => bridge.finish());
+    twilioWs.on('error', (e) => console.error('twilio ws error', e.message));
+  });
+});

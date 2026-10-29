@@ -70,7 +70,7 @@
     <div class="card">
       <div class="row">
         <strong>Import businesses</strong>
-        <input type="file" id="file" accept=".xlsx,.csv">
+        <input type="file" id="file" accept=".xlsx,.xls,.csv">
         <button id="uploadBtn" class="primary">Upload sheet</button>
         <span id="importResult" class="muted"></span>
       </div>
@@ -106,6 +106,7 @@
 <aside id="drawer"></aside>
 <div id="toast"></div>
 
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <script>
 const STATUSES = ['new','queued','calling','no_answer','voicemail','callback','interested','won','not_interested','completed','failed','dnc'];
 const $ = (s) => document.querySelector(s);
@@ -114,7 +115,7 @@ const selected = new Set();
 let leads = [];
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { headers: opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}, ...opts });
+  const res = await fetch(path, { headers: opts.body ? { 'Content-Type': 'application/json' } : {}, ...opts });
   if (res.status === 401 && path !== '/api/login') { showLogin(); throw new Error('login required'); }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
@@ -144,7 +145,7 @@ async function loadStatus() {
   $('#providerInfo').textContent = `Voice: ${s.provider === 'elevenlabs' ? 'ElevenLabs' : 'OpenAI Realtime'}`;
   const voiceOk = s.provider === 'elevenlabs' ? c.elevenlabs : c.openai;
   const lines = [
-    `${mark(voiceOk)} Calling (${s.provider})`,
+    `${mark(voiceOk)} Calling (${s.provider})${s.providerProblem ? ` <span class="muted">${esc(s.providerProblem)}</span>` : ''}`,
     s.provider === 'elevenlabs' ? `${mark(c.webhookSecret)} Webhook secret` : '',
     `${mark(c.email)} Email follow-up`,
     `${mark(c.sms)} SMS`,
@@ -222,12 +223,33 @@ $('#callSelected').onclick = async () => {
 };
 $('#clearQueue').onclick = async () => { await api('/api/queue/clear', { method: 'POST' }); toast('Queue cleared (calls in progress continue)'); refresh(); };
 
+// The sheet is read here in the browser; only the rows are sent to the server.
+function sheetRows(wb) {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws || !ws['!ref']) return [];
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  const rows = [];
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const row = [];
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })];
+      let v = cell ? String(cell.w ?? cell.v ?? '').trim() : '';
+      // A cell showing "preview" that links somewhere: keep the link itself.
+      const target = cell?.l?.Target;
+      if (target && !/^https?:|^www\.|\.\w{2,}/i.test(v)) v = target.replace(/^mailto:/, '');
+      row.push(v);
+    }
+    if (row.some(Boolean)) rows.push(row);
+  }
+  return rows;
+}
+
 $('#uploadBtn').onclick = async () => {
   const f = $('#file').files[0];
   if (!f) return toast('Pick a .xlsx or .csv file first');
-  const fd = new FormData(); fd.append('file', f);
   try {
-    const r = await api('/api/import', { method: 'POST', body: fd });
+    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+    const r = await api('/api/import', { method: 'POST', body: JSON.stringify({ filename: f.name, rows: sheetRows(wb) }) });
     $('#importResult').textContent = `Imported ${r.imported}, skipped ${r.skipped.length}. Columns used: ` +
       Object.entries(r.mapping).map(([k, v]) => `${k}←"${v}"`).join(', ');
     refresh();

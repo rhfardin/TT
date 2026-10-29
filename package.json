@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/server.js",
     "dev": "node --watch --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/server.js",
-    "local": "node --env-file=.env --disable-warning=ExperimentalWarning src/server.js"
+    "local": "node --env-file=.env --disable-warning=ExperimentalWarning src/server.js",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy"
   },
   "repository": {
     "type": "git",
@@ -19,15 +21,15 @@
   },
   "homepage": "https://github.com/rhfardin/TT#readme",
   "dependencies": {
-    "cookie-parser": "^1.4.7",
-    "exceljs": "^4.4.0",
     "express": "^4.22.3",
-    "multer": "^2.5.0",
     "nodemailer": "^10.2.1",
     "ws": "^8.22.0"
   },
   "type": "module",
   "engines": {
     "node": ">=22.13"
+  },
+  "devDependencies": {
+    "wrangler": "^4.155.0"
   }
 }
