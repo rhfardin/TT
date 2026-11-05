@@ -20,6 +20,7 @@ export async function startApp(env = {}) {
     updates: [], // { sid, twiml } for live calls redirected (transfers)
     failUpdates: false,
     numberUpdates: [], // changes to the Twilio number's settings (incoming call URL)
+    calcom: { slots: [], bookings: [], requests: [], fail: null }, // fake Cal.com calendar
     lastTwiml: null, // what our server answered to the last signed Twilio webhook
   };
 
@@ -73,6 +74,26 @@ export async function startApp(env = {}) {
         return new Response('{}');
       }
       return new Response('{}');
+    }
+    if (url.startsWith('https://api.cal.com/v2/')) {
+      fake.calcom.requests.push({ url, headers: opts.headers, body: opts.body && JSON.parse(opts.body) });
+      if (fake.calcom.fail) return new Response(JSON.stringify({ status: 'error', error: { message: fake.calcom.fail } }), { status: 401 });
+      if (url.includes('/v2/slots?')) {
+        const q = new URL(url).searchParams;
+        const from = Date.parse(q.get('start'));
+        const to = Date.parse(q.get('end'));
+        const data = {};
+        for (const s of fake.calcom.slots) {
+          if (Date.parse(s) < from || Date.parse(s) > to) continue;
+          (data[s.slice(0, 10)] ??= []).push({ start: s });
+        }
+        return new Response(JSON.stringify({ status: 'success', data }));
+      }
+      if (url.endsWith('/v2/bookings')) {
+        const body = JSON.parse(opts.body);
+        fake.calcom.bookings.push(body);
+        return new Response(JSON.stringify({ status: 'success', data: { uid: `bk${fake.calcom.bookings.length}`, start: body.start } }), { status: 201 });
+      }
     }
     if (url.includes('chat/completions')) {
       return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(fake.analysis) } }] }));

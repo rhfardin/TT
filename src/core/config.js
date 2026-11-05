@@ -36,6 +36,13 @@ export function buildConfig(e) {
       phone: env('TRANSFER_PHONE'),
     },
 
+    // Cal.com: the AI offers open times and books calls with the owner during the call.
+    calcom: {
+      apiKey: env('CALCOM_API_KEY'),
+      username: env('CALCOM_USERNAME'),
+      eventSlug: env('CALCOM_EVENT_SLUG'),
+    },
+
     // Shared secret the ElevenLabs agent's tools send in the X-Tool-Secret header.
     toolSecret: env('TOOL_SECRET'),
 

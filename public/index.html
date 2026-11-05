@@ -290,7 +290,25 @@
         </div>
 
         <div class="card">
-          <h2>8. When businesses call you back</h2>
+          <h2>8. Booking calls with you (Cal.com)</h2>
+          <p class="muted" style="margin:0">When an owner wants to talk it through, the AI offers real open times from your Cal.com calendar and books the call during the conversation. Cal.com emails them the invite. Without this, the AI arranges a callback instead.</p>
+          <div class="grid">
+            <div class="full"><label>Cal.com API key</label><input name="CALCOM_API_KEY" type="password" autocomplete="off" placeholder="cal_live_…">
+              <div class="help">Cal.com → Settings → Developer → API Keys</div></div>
+            <div><label>Username</label><input name="CALCOM_USERNAME" placeholder="fardin">
+              <div class="help">The part after cal.com/ in your booking link</div></div>
+            <div><label>Event</label><input name="CALCOM_EVENT_SLUG" placeholder="15min">
+              <div class="help">The last part of the event's link: cal.com/fardin/<b>15min</b></div></div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button type="button" id="testCalcom">Test connection</button>
+            <span id="calcomResult" class="muted"></span>
+          </div>
+          <div class="help" style="margin-top:6px">Save first, then test.</div>
+        </div>
+
+        <div class="card">
+          <h2>9. When businesses call you back</h2>
           <p class="muted" style="margin:0">The AI answers calls to your Twilio number, any time of day. It recognizes businesses from your list by their number and picks up the conversation; for anyone else it finds out who they are and takes a message. Twilio needs to know where to send those calls:</p>
           <div class="row" style="margin-top:12px">
             <button type="button" id="setupInbound">Set it up for me</button>
@@ -644,6 +662,14 @@ $('#settingsForm').onsubmit = async (e) => {
     setTimeout(() => ($('#saveResult').textContent = ''), 3000);
     loadSettings(); loadStatus();
   } catch (err) { $('#saveResult').textContent = err.message; }
+};
+
+$('#testCalcom').onclick = async () => {
+  $('#calcomResult').textContent = 'Checking…';
+  try {
+    const r = await api('/api/setup/calcom', { method: 'POST', body: '{}' });
+    $('#calcomResult').textContent = r.count ? `Works. ${r.count} open times this week; the first is ${r.next}.` : 'Connected, but there are no open times in the next 7 days. Check your availability in Cal.com.';
+  } catch (err) { $('#calcomResult').textContent = err.message; }
 };
 
 $('#setupInbound').onclick = async () => {

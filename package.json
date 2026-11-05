@@ -9,7 +9,7 @@
     "local": "node --env-file=.env --disable-warning=ExperimentalWarning src/server.js",
     "cf:dev": "wrangler dev",
     "cf:deploy": "wrangler deploy",
-    "test": "node --test --disable-warning=ExperimentalWarning test/*.test.js"
+    "test": "node --test --test-timeout=30000 --disable-warning=ExperimentalWarning test/*.test.js"
   },
   "repository": {
     "type": "git",

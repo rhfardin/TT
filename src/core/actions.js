@@ -1,6 +1,7 @@
 // Everything that happens around a call, shared by the Node server and the Cloudflare Worker.
 // ctx = { config, store, sendEmail?(to, subject, text) }
-import { checkLead, canCallNow, nextWindowStart, normalizePhone, FINAL_STATUSES } from './leads.js';
+import { checkLead, canCallNow, nextWindowStart, normalizePhone, leadTimezone, FINAL_STATUSES } from './leads.js';
+import { calcomReady, getSlots, book, spokenTime } from './calcom.js';
 import { promptVariables, followUpMessage, OUTCOME_STATUS, OUTCOMES } from './agent.js';
 import { createStreamingCall, sendSms, hangUp, updateCall, transferTwiml, whisperTwiml, streamTwiml } from './twilio.js';
 import { hmacHex, safeEqual } from './crypto.js';
@@ -331,6 +332,80 @@ export async function sendDemoLink(ctx, { lead_id, email, contact_name, channel 
     return { ok: false, message: 'The link could not be sent automatically. Tell them the team will send it over shortly.' };
   }
   return { ok: true, message: `Sent the link by ${sent.join(' and ')}.` };
+}
+
+// ---- Booking a call with the owner (Cal.com) ----
+
+const isEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || ''));
+
+// A handful of open times in the business's timezone: the first two of the next three days that have any.
+export async function checkAvailability(ctx, { lead_id, day }) {
+  const { config, store } = ctx;
+  const name = config.seller.yourName || 'the owner';
+  if (!calcomReady(config.calcom)) return { ok: false, message: `Booking isn't set up. Offer that ${name} calls them back, and get a good time.` };
+  const lead = await store.getLead(lead_id);
+  if (!lead) return { ok: false, message: 'Unknown business.' };
+  const timeZone = leadTimezone(lead, config.calling);
+  let from = new Date();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(day || ''))) {
+    const d = new Date(`${day}T00:00:00Z`);
+    if (d > from) from = d;
+  }
+  let slots;
+  try {
+    slots = await getSlots(config.calcom, { timeZone, from, days: day ? 2 : 7 });
+  } catch (err) {
+    await store.logEvent(lead.id, 'calcom_error', err.message);
+    return { ok: false, message: `The calendar couldn't be checked. Offer that ${name} calls them back, and get a good time.` };
+  }
+  const soon = Date.now() + 30 * 60 * 1000;
+  const perDay = new Map();
+  for (const s of slots) {
+    if (Date.parse(s) < soon) continue;
+    const key = new Intl.DateTimeFormat('en-CA', { timeZone, dateStyle: 'short' }).format(new Date(s));
+    if (!perDay.has(key)) perDay.set(key, []);
+    if (perDay.get(key).length < 2) perDay.get(key).push(s);
+  }
+  const picked = [...perDay.values()].slice(0, 3).flat();
+  if (!picked.length) return { ok: false, message: `No open times soon. Offer that ${name} calls them back, and get a good time.` };
+  return {
+    ok: true,
+    times: picked.map((s) => ({ start: s, say: spokenTime(s, timeZone) })),
+    message: 'Offer two or three of these naturally, in their time. When they pick one, confirm their email, then call book_meeting with that exact start.',
+  };
+}
+
+export async function bookMeeting(ctx, { lead_id, start, name, email }) {
+  const { config, store } = ctx;
+  const owner = config.seller.yourName || 'the owner';
+  if (!calcomReady(config.calcom)) return { ok: false, message: `Booking isn't set up. Offer that ${owner} calls them back.` };
+  const lead = await store.getLead(lead_id);
+  if (!lead) return { ok: false, message: 'Unknown business.' };
+  email = String(email || lead.email || '').trim();
+  if (!isEmail(email)) return { ok: false, message: 'Ask for their email (spell it back to confirm), then try book_meeting again.' };
+  const at = new Date(start);
+  if (Number.isNaN(at.getTime())) return { ok: false, message: 'Use one of the exact start times from check_availability.' };
+  const startIso = at.toISOString();
+  const timeZone = leadTimezone(lead, config.calling);
+  try {
+    // Book only times the calendar really has open right now (the model might misremember one).
+    const open = await getSlots(config.calcom, { timeZone, from: new Date(at.getTime() - 60 * 1000), days: 1 });
+    if (!open.includes(startIso)) {
+      return { ok: false, message: 'That time isn\'t open any more. Call check_availability again and offer other times.' };
+    }
+    const r = await book(config.calcom, {
+      start: startIso, email, timeZone, phone: /^\+/.test(lead.phone) ? lead.phone : null,
+      name: String(name || lead.contact_name || lead.business_name).slice(0, 100),
+      notes: `${lead.business_name}: website redesign call, booked by the AI caller.`,
+    });
+    const say = spokenTime(startIso, timeZone);
+    await store.updateLead(lead.id, { meeting_time: say, ...(lead.email ? {} : { email }) });
+    await store.logEvent(lead.id, 'meeting_booked', { start: startIso, uid: r.uid });
+    return { ok: true, message: `Booked for ${say}, their time. Cal.com emails them the invite. Confirm the day and time back to them.` };
+  } catch (err) {
+    await store.logEvent(lead.id, 'calcom_error', err.message);
+    return { ok: false, message: `The booking didn't go through. Apologize, and offer that ${owner} calls them back at that time instead.` };
+  }
 }
 
 export async function markDoNotCall(ctx, { lead_id, reason }) {

@@ -5,7 +5,8 @@
 //   env: the raw environment variables (saved dashboard settings are layered on top of them in config)
 import { rowsToLeads, normalizePhone } from './leads.js';
 import { settingsForDashboard, cleanSettingsUpdate } from './settings.js';
-import { placeCall, sendDemoLink, markDoNotCall, providerProblem } from './actions.js';
+import { placeCall, sendDemoLink, markDoNotCall, providerProblem, checkAvailability, bookMeeting } from './actions.js';
+import { calcomReady, getSlots, spokenTime } from './calcom.js';
 import { enqueueLeads, queueState, clearQueue } from './queue.js';
 import { randomToken, secretEqual } from './crypto.js';
 import { fetchRecording, setInboundUrl } from './twilio.js';
@@ -38,6 +39,8 @@ export async function handleRequest(ctx, req) {
     try {
       if (path === '/tools/send-demo-link') return ok(await sendDemoLink(ctx, pick(body, ['lead_id', 'email', 'contact_name', 'channel'])));
       if (path === '/tools/do-not-call') return ok(await markDoNotCall(ctx, pick(body, ['lead_id', 'reason'])));
+      if (path === '/tools/check-availability') return ok(await checkAvailability(ctx, pick(body, ['lead_id', 'day'])));
+      if (path === '/tools/book-meeting') return ok(await bookMeeting(ctx, pick(body, ['lead_id', 'start', 'name', 'email'])));
     } catch (err) {
       return ok({ ok: false, message: 'That did not work. Tell them the team will follow up shortly.' });
     }
@@ -84,6 +87,7 @@ export async function handleRequest(ctx, req) {
         toolSecret: Boolean(config.toolSecret),
         email: Boolean(ctx.sendEmail),
         sms: Boolean(config.twilio.accountSid && config.twilio.fromNumber),
+        calcom: calcomReady(config.calcom),
       },
       calling: config.calling,
       queue: await queueState(ctx),
@@ -92,6 +96,8 @@ export async function handleRequest(ctx, req) {
       toolUrls: {
         sendDemoLink: `${config.publicUrl}/tools/send-demo-link`,
         doNotCall: `${config.publicUrl}/tools/do-not-call`,
+        checkAvailability: `${config.publicUrl}/tools/check-availability`,
+        bookMeeting: `${config.publicUrl}/tools/book-meeting`,
       },
       counts: await store.statusCounts(),
     });
@@ -200,6 +206,18 @@ export async function handleRequest(ctx, req) {
       return ok({ error: err.message }, 400);
     }
     return ok({ ok: true, voiceUrl: `${config.publicUrl}/twilio/inbound` });
+  }
+
+  // Checks the Cal.com details by fetching real open times.
+  if (method === 'POST' && path === '/api/setup/calcom') {
+    if (!calcomReady(config.calcom)) return ok({ error: 'Add your Cal.com API key, username and event first, then save' }, 400);
+    try {
+      const tz = config.calling.defaultTimezone;
+      const slots = await getSlots(config.calcom, { timeZone: tz, days: 7 });
+      return ok({ ok: true, count: slots.length, next: slots[0] ? spokenTime(slots[0], tz) : null });
+    } catch (err) {
+      return ok({ error: `Cal.com said: ${err.message}` }, 400);
+    }
   }
 
   if (method === 'POST' && path === '/api/queue/clear') {

@@ -41,6 +41,9 @@ export const SETTINGS = [
   { key: 'RECORD_CALLS' },
   { key: 'TRANSFER_ENABLED' },
   { key: 'TRANSFER_PHONE' },
+  { key: 'CALCOM_API_KEY', secret: true },
+  { key: 'CALCOM_USERNAME' },
+  { key: 'CALCOM_EVENT_SLUG' },
 ];
 const BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 
@@ -69,6 +72,8 @@ const VALIDATE = {
   AMD_ENABLED: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
   RECORD_CALLS: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
   TRANSFER_ENABLED: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
+  CALCOM_USERNAME: (v) => (/^[\w.-]+$/.test(v) ? null : 'is the part after cal.com/ in your booking link'),
+  CALCOM_EVENT_SLUG: (v) => (/^[\w.-]+$/.test(v) ? null : 'is the last part of your event link, like 15min'),
   TRANSFER_PHONE: (v) => (/^\+\d{8,15}$/.test(v) ? null : 'must look like +15551234567'),
   TWILIO_FROM_NUMBER: (v) => (/^\+\d{8,15}$/.test(v) ? null : 'must look like +15551234567'),
 };
@@ -78,6 +83,7 @@ const LABELS = {
   TWILIO_FROM_NUMBER: 'Twilio phone number', MAX_CALL_SECONDS: 'Max call length', RETRY_NO_ANSWER_HOURS: 'Retry after no answer',
   RETRY_VOICEMAIL_HOURS: 'Retry after voicemail', AMD_ENABLED: 'Voicemail detection', RECORD_CALLS: 'Record calls',
   TRANSFER_ENABLED: 'Live transfer', TRANSFER_PHONE: 'Your phone for transfers',
+  CALCOM_USERNAME: 'Cal.com username', CALCOM_EVENT_SLUG: 'Cal.com event',
 };
 
 // Blank secret fields mean "keep the current one"; blank normal fields mean "use the default".

@@ -49,9 +49,13 @@ export function promptVariables(lead, seller) {
 // transfer: 'available' (the owner can be connected live), 'unavailable', or 'missed' (we just tried and
 //   he didn't pick up; history holds the conversation so far, so the AI can pick it back up).
 // inbound: 'known' (a business from the list calling back) or 'unknown' (a number we don't have).
-export function renderPrompt(template, lead, seller, { recording = false, transfer = 'unavailable', history = [], inbound = null } = {}) {
+// booking: Cal.com is set up, so the AI books calls with the owner instead of vaguely promising one.
+export function renderPrompt(template, lead, seller, { recording = false, transfer = 'unavailable', history = [], inbound = null, booking = false } = {}) {
   const vars = promptVariables(lead, seller);
   const name = seller.yourName || 'the owner';
+  const callBack = booking
+    ? `book a quick call with ${name} for them (check_availability, then book_meeting)`
+    : `offer that ${name} calls them back today, and get the best time and number for that`;
   let extra = lead.email ? `\n\n# Email on file\nThe email we have on file is ${lead.email}. Confirm it before sending.` : '';
   if (inbound === 'known') {
     extra += `\n\n# This is an incoming call\nThey are calling you: ${lead.business_name}, probably returning a call or replying to ` +
@@ -76,14 +80,21 @@ export function renderPrompt(template, lead, seller, { recording = false, transf
       `"Sure, one sec, let me grab him for you", then call transfer_to_fardin with a one-sentence summary for ${name} ` +
       '(who they are and what they want). Say nothing after calling it.';
   } else if (transfer === 'unavailable') {
-    extra += `\n\n# Talking to ${name} live\nIf they ask to speak to ${name} or a person right now: he can't jump on right this minute. ` +
-      `Offer that ${name} calls them back today, and get the best time and number for that.`;
+    extra += `\n\n# Talking to ${name} live\nIf they ask to speak to ${name} or a person right now: he can't jump on right this minute, ` +
+      `so ${callBack}.`;
   } else if (transfer === 'missed') {
     const lines = history.slice(-20).map((t) => `${t.role === 'agent' ? 'You' : 'Them'}: ${t.message}`).join('\n');
     extra += `\n\n# Picking the call back up\nYou just tried to connect them to ${name}, but he couldn't pick up. ` +
-      `Start right away with a short apology ("Sorry about that, looks like ${name} is tied up right now"), then offer that he ` +
-      'calls them back today (get a good time) or that you email the preview. Keep it short. Don\'t introduce yourself again.' +
+      `Start right away with a short apology ("Sorry about that, looks like ${name} is tied up right now"), then ${callBack}, ` +
+      'or email the preview. Keep it short. Don\'t introduce yourself again.' +
       (lines ? `\n\nThe conversation so far:\n${lines}` : '');
+  }
+  if (booking) {
+    extra += `\n\n# Booking a call with ${name}\nWhen they want to talk it through, need to think, or ask questions only ${name} can answer, ` +
+      `book a quick call with him instead of promising one. Call check_availability, then offer two or three of the times it gives, ` +
+      `naturally ("I've got Tuesday at 10 or Wednesday at 2, what works better?"). If they name a day, pass it as day. ` +
+      'Once they pick, confirm their name and email (spell the email back), call book_meeting with that exact start, ' +
+      'then confirm the day and time back to them. Never make up a time that check_availability didn\'t give you.';
   }
   return template.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? '') + extra;
 }
@@ -136,7 +147,34 @@ export const TRANSFER_TOOL = {
   },
 };
 
-export const realtimeTools = ({ transfer = false } = {}) => (transfer ? [...REALTIME_TOOLS, TRANSFER_TOOL] : REALTIME_TOOLS);
+export const BOOKING_TOOLS = [
+  {
+    type: 'function',
+    name: 'check_availability',
+    description: 'Get open times for a call with the owner, in the business\'s timezone.',
+    parameters: {
+      type: 'object',
+      properties: { day: { type: 'string', description: 'Optional day they asked for, as YYYY-MM-DD.' } },
+    },
+  },
+  {
+    type: 'function',
+    name: 'book_meeting',
+    description: 'Book the call at a time the person picked from check_availability.',
+    parameters: {
+      type: 'object',
+      properties: {
+        start: { type: 'string', description: 'The exact start value from check_availability.' },
+        name: { type: 'string', description: 'Name of the person the call is with.' },
+        email: { type: 'string', description: 'Their email, confirmed with them.' },
+      },
+      required: ['start', 'email'],
+    },
+  },
+];
+
+export const realtimeTools = ({ transfer = false, booking = false } = {}) =>
+  [...REALTIME_TOOLS, ...(transfer ? [TRANSFER_TOOL] : []), ...(booking ? BOOKING_TOOLS : [])];
 
 // Maps the call outcome to a lead status.
 export const OUTCOME_STATUS = {

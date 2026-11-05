@@ -10,8 +10,9 @@ import { renderPrompt, firstGreeting, realtimeTools } from './agent.js';
 import { streamToken, hangUp } from './twilio.js';
 import {
   sendDemoLink, markDoNotCall, recordCallResult, recordVoicemail, analyzeCall, isMachine, transferAvailable, startTransfer,
-  UNKNOWN_CALLER,
+  UNKNOWN_CALLER, checkAvailability, bookMeeting,
 } from './actions.js';
+import { calcomReady } from './calcom.js';
 import { safeEqual } from './crypto.js';
 
 // Duration of a base64 chunk of 8 kHz mu-law audio (1 byte per sample).
@@ -137,6 +138,7 @@ export class CallBridge {
     const inbound = this.inbound ? (this.lead.business_name === UNKNOWN_CALLER ? 'unknown' : 'known') : null;
     this.transferOk = !this.resumed && transferAvailable(this.config, this.lead);
     const transfer = this.resumed ? 'missed' : this.transferOk ? 'available' : 'unavailable';
+    const booking = calcomReady(this.config.calcom);
     this.sendOpenAI({
       type: 'session.update',
       session: {
@@ -144,7 +146,7 @@ export class CallBridge {
         model: realtimeModel,
         output_modalities: ['audio'],
         instructions: renderPrompt(this.promptTemplate, this.lead, this.config.seller,
-          { recording: this.config.recordCalls, transfer, history: this.transcript, inbound }),
+          { recording: this.config.recordCalls, transfer, history: this.transcript, inbound, booking }),
         audio: {
           input: {
             format: { type: 'audio/pcmu' },
@@ -154,7 +156,7 @@ export class CallBridge {
           },
           output: { format: { type: 'audio/pcmu' }, voice },
         },
-        tools: realtimeTools({ transfer: this.transferOk }),
+        tools: realtimeTools({ transfer: this.transferOk, booking }),
         tool_choice: 'auto',
       },
     });
@@ -277,6 +279,10 @@ export class CallBridge {
           result = await sendDemoLink(this.ctx, { ...pick(args, ['email', 'contact_name', 'channel']), lead_id: this.lead.id });
         } else if (fc.name === 'mark_do_not_call') {
           result = await markDoNotCall(this.ctx, { ...pick(args, ['reason']), lead_id: this.lead.id });
+        } else if (fc.name === 'check_availability') {
+          result = await checkAvailability(this.ctx, { ...pick(args, ['day']), lead_id: this.lead.id });
+        } else if (fc.name === 'book_meeting') {
+          result = await bookMeeting(this.ctx, { ...pick(args, ['start', 'name', 'email']), lead_id: this.lead.id });
         } else if (fc.name === 'transfer_to_fardin') {
           if (this.transferOk && !this.transferring) {
             // Connect once "one sec, let me grab him" has finished playing. No reply to the model:
