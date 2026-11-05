@@ -1,6 +1,6 @@
 // Everything that happens around a call, shared by the Node server and the Cloudflare Worker.
 // ctx = { config, store, sendEmail?(to, subject, text) }
-import { checkLead, canCallNow, nextWindowStart, FINAL_STATUSES } from './leads.js';
+import { checkLead, canCallNow, nextWindowStart, normalizePhone, FINAL_STATUSES } from './leads.js';
 import { promptVariables, followUpMessage, OUTCOME_STATUS, OUTCOMES } from './agent.js';
 import { createStreamingCall, sendSms, hangUp, updateCall, transferTwiml, whisperTwiml, streamTwiml } from './twilio.js';
 import { hmacHex, safeEqual } from './crypto.js';
@@ -83,17 +83,25 @@ export async function recordCallResult(ctx, callId, { summary, transcript, outco
   });
 
   const fields = { last_summary: summary ?? null };
-  // A "do not call" set by a tool during the call wins over anything else.
-  if (lead.status !== 'dnc') {
-    const talked = (transcript ?? []).some((t) => t.role === 'user');
+  const inbound = call.direction === 'inbound';
+  const talked = (transcript ?? []).some((t) => t.role === 'user');
+  // A "do not call" set by a tool during the call wins over anything else. A caller who hung up
+  // straight away doesn't change anything.
+  if (lead.status !== 'dnc' && (talked || !inbound)) {
     fields.status = OUTCOME_STATUS[outcome] ?? (talked ? 'completed' : 'no_answer');
   }
+  if (collected.business_name && lead.business_name === UNKNOWN_CALLER) fields.business_name = String(collected.business_name).slice(0, 200);
   if (collected.meeting_time) fields.meeting_time = String(collected.meeting_time);
   if (collected.email && !lead.email) fields.email = String(collected.email);
   if (collected.decision_maker_name && !lead.contact_name) fields.contact_name = String(collected.decision_maker_name);
   await store.updateLead(lead.id, fields);
-  await store.logEvent(lead.id, 'call_completed', { outcome, duration });
-  if (fields.status === 'no_answer' || fields.status === 'voicemail') await scheduleRetry(ctx, lead.id, fields.status);
+  await store.logEvent(lead.id, 'call_completed', { outcome, duration, direction: call.direction });
+  if (inbound) {
+    // They called us back: a retry call already waiting for them would be one call too many.
+    if (talked) await store.dequeueLead(lead.id);
+  } else if (fields.status === 'no_answer' || fields.status === 'voicemail') {
+    await scheduleRetry(ctx, lead.id, fields.status);
+  }
 }
 
 export const isMachine = (answeredBy) => /^(machine|fax)/.test(String(answeredBy || ''));
@@ -144,6 +152,31 @@ export async function handleTwilioStatus(ctx, callId, params) {
       await finalizeTransfer(ctx, callId, { duration: Number(params.CallDuration) || null });
     }
   }
+}
+
+// ---- Incoming calls (OpenAI provider) ----
+
+export const UNKNOWN_CALLER = 'Unknown caller';
+
+// Twilio asks what to do with a call to our number: find who's calling and connect the AI.
+export async function handleTwilioInbound(ctx, _callId, params) {
+  const { store, config } = ctx;
+  if (!params.CallSid || providerProblem(config)) {
+    return `<Response><Say>Sorry, nobody can take your call right now. Please try again later.</Say><Hangup/></Response>`;
+  }
+  // Hidden numbers still get answered; they just can't be matched to a business.
+  const phone = normalizePhone(params.From, config.calling.defaultCountryCode) || `hidden:${params.CallSid}`;
+  let lead = await store.getLeadByPhone(phone);
+  if (!lead) {
+    await store.upsertLeads([{
+      phone, business_name: UNKNOWN_CALLER, contact_name: null, email: null, website: null, demo_link: null,
+      category: null, city: null, timezone: null, notes: 'Called our number; not in the sheet.', extra: '{}',
+    }]);
+    lead = await store.getLeadByPhone(phone);
+  }
+  const callId = await store.insertInboundCall(lead.id, params.CallSid);
+  await store.logEvent(lead.id, 'inbound_call', params.From || 'hidden number');
+  return streamTwiml(config, callId);
 }
 
 // ---- Live transfer to the owner (OpenAI provider) ----
@@ -226,6 +259,7 @@ export async function finalizeTransfer(ctx, callId, { talkSecs = null, duration 
       decision_maker_name: analysis.decision_maker_name || null,
       next_step: connected ? analysis.next_step || null : `Call them back: they wanted to talk to ${name}.`,
       requests: analysis.requests || null,
+      business_name: analysis.business_name || null,
       talk_secs: talkSecs,
     },
     duration,
@@ -327,7 +361,8 @@ export async function analyzeCall(config, lead, transcript, endReason) {
             `{"outcome": one of ${JSON.stringify(OUTCOMES)}, "summary": "2-3 sentences for the salesperson", ` +
             '"meeting_time": "agreed follow-up time or empty", "email": "email they gave or empty", ' +
             '"decision_maker_name": "owner/decision maker name or empty", "next_step": "what the salesperson should do next", ' +
-            '"requests": "changes they want, questions the AI could not answer, and anything promised to them, or empty"}. ' +
+            '"requests": "changes they want, questions the AI could not answer, and anything promised to them, or empty", ' +
+            '"business_name": "the caller\'s business name if they said it, or empty"}. ' +
             'Use "link_sent" if they agreed to receive the preview, "sold" only if they clearly agreed to buy.',
         },
         { role: 'user', content: text },

@@ -16,6 +16,25 @@ async function post(tw, path, params) {
   return body;
 }
 
+async function get(tw, path) {
+  const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(tw.accountSid)}${path}`, {
+    headers: { Authorization: 'Basic ' + btoa(`${tw.accountSid}:${tw.authToken}`) },
+  }).catch((err) => {
+    throw new Error(`Could not reach Twilio (${err.message})`);
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.message || `Twilio HTTP ${res.status}`);
+  return body;
+}
+
+// Points the Twilio number's incoming calls at our /twilio/inbound route.
+export async function setInboundUrl(tw, voiceUrl) {
+  const list = await get(tw, `/IncomingPhoneNumbers.json?PhoneNumber=${encodeURIComponent(tw.fromNumber)}`);
+  const number = list.incoming_phone_numbers?.[0];
+  if (!number) throw new Error(`${tw.fromNumber} isn't a number in this Twilio account`);
+  await post(tw, `/IncomingPhoneNumbers/${encodeURIComponent(number.sid)}.json`, { VoiceUrl: voiceUrl, VoiceMethod: 'POST' });
+}
+
 // Token the media stream must present, so random clients can't open AI sessions on our bill.
 export const streamToken = (tw, callId) => hmacHex(tw.authToken, `stream:${callId}`);
 

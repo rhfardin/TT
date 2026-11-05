@@ -289,6 +289,16 @@
           </div>
         </div>
 
+        <div class="card">
+          <h2>8. When businesses call you back</h2>
+          <p class="muted" style="margin:0">The AI answers calls to your Twilio number, any time of day. It recognizes businesses from your list by their number and picks up the conversation; for anyone else it finds out who they are and takes a message. Twilio needs to know where to send those calls:</p>
+          <div class="row" style="margin-top:12px">
+            <button type="button" id="setupInbound">Set it up for me</button>
+            <span id="inboundResult" class="muted"></span>
+          </div>
+          <div class="help" style="margin-top:8px">Or do it by hand: Twilio → Phone Numbers → your number → "A call comes in" → Webhook, POST: <code id="inboundUrl"></code></div>
+        </div>
+
         <div class="savebar"><button class="primary">Save settings</button><span id="saveResult" class="muted"></span></div>
       </form>
     </section>
@@ -556,6 +566,7 @@ async function openLead(id) {
       <div class="card">
         <div class="row"><b>${esc(new Date(c.created_at.replace(' ', 'T') + 'Z').toLocaleString())}</b>
           ${c.duration_secs ? `<span class="muted">${Math.round(c.duration_secs / 60 * 10) / 10} min</span>` : ''}</div>
+        ${c.direction === 'inbound' ? '<p><span class="pill good">They called you</span></p>' : ''}
         ${/^(machine|fax)/.test(c.answered_by || '') ? '<p class="muted">Voicemail detected, so the AI hung up.</p>' : ''}
         ${c.transfer_state === 'connected' ? `<p><span class="pill good">Transferred to you${c.outcome?.talk_secs ? ` · ${Math.max(1, Math.round(c.outcome.talk_secs / 60))} min` : ''}</span></p>` : ''}
         ${['missed', 'declined'].includes(c.transfer_state) ? '<p><span class="pill warn">Tried to transfer to you; you didn\'t pick up</span></p>' : ''}
@@ -597,6 +608,7 @@ const DEFAULTS = { OPENAI_REALTIME_MODEL: 'gpt-realtime-mini', OPENAI_VOICE: 'ma
 
 let loadedSettings = {};
 async function loadSettings() {
+  api('/api/status').then((st) => ($('#inboundUrl').textContent = st.inboundUrl)).catch(() => {});
   const s = await api('/api/settings');
   const form = $('#settingsForm');
   loadedSettings = {};
@@ -632,6 +644,14 @@ $('#settingsForm').onsubmit = async (e) => {
     setTimeout(() => ($('#saveResult').textContent = ''), 3000);
     loadSettings(); loadStatus();
   } catch (err) { $('#saveResult').textContent = err.message; }
+};
+
+$('#setupInbound').onclick = async () => {
+  $('#inboundResult').textContent = 'Setting up…';
+  try {
+    await api('/api/setup/inbound', { method: 'POST', body: '{}' });
+    $('#inboundResult').textContent = 'Done. Calls to your number are now answered by the AI.';
+  } catch (err) { $('#inboundResult').textContent = err.message; }
 };
 
 $('#testCall').onclick = async () => {

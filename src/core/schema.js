@@ -97,6 +97,11 @@ export const MIGRATIONS = [
       'ALTER TABLE calls ADD COLUMN transfer_summary TEXT',
     ],
   },
+  {
+    // Calls businesses make to our number (callbacks), answered by the AI.
+    version: 6,
+    statements: ["ALTER TABLE calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'outbound'"],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).version;

@@ -90,6 +90,10 @@ export function createStore(db) {
     async insertCall(leadId, conversationId = null) {
       return (await db.run('INSERT INTO calls (lead_id, conversation_id) VALUES (?, ?)', Number(leadId), conversationId)).lastId;
     },
+    async insertInboundCall(leadId, callSid) {
+      return (await db.run(`INSERT INTO calls (lead_id, call_sid, direction, status) VALUES (?, ?, 'inbound', 'ringing')`,
+        Number(leadId), callSid)).lastId;
+    },
     // Moves a call from one status to another only if nobody else did first. Returns true if we did.
     async claimCallStatus(id, from, to) {
       return (await db.run('UPDATE calls SET status = ? WHERE id = ? AND status = ?', to, Number(id), from)).changes === 1;
@@ -121,6 +125,7 @@ export function createStore(db) {
     rescheduleQueueItem: (id, notBeforeIso) =>
       db.run('UPDATE queue_items SET not_before = ?, claimed_at = NULL WHERE id = ?', notBeforeIso, id),
     deleteQueueItem: (id) => db.run('DELETE FROM queue_items WHERE id = ?', id),
+    dequeueLead: (leadId) => db.run('DELETE FROM queue_items WHERE lead_id = ?', Number(leadId)),
     async queueStats() {
       const r = await db.get('SELECT COUNT(*) AS n, MIN(not_before) AS next_at FROM queue_items WHERE claimed_at IS NULL');
       return { pending: r.n, nextAt: r.next_at ?? null };

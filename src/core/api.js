@@ -8,7 +8,7 @@ import { settingsForDashboard, cleanSettingsUpdate } from './settings.js';
 import { placeCall, sendDemoLink, markDoNotCall, providerProblem } from './actions.js';
 import { enqueueLeads, queueState, clearQueue } from './queue.js';
 import { randomToken, secretEqual } from './crypto.js';
-import { fetchRecording } from './twilio.js';
+import { fetchRecording, setInboundUrl } from './twilio.js';
 
 const ok = (json, status = 200, headers) => ({ status, json, headers });
 const EDITABLE = ['business_name', 'contact_name', 'phone', 'email', 'website', 'demo_link', 'category', 'city',
@@ -88,6 +88,7 @@ export async function handleRequest(ctx, req) {
       calling: config.calling,
       queue: await queueState(ctx),
       webhookUrl: `${config.publicUrl}/webhooks/elevenlabs`,
+      inboundUrl: `${config.publicUrl}/twilio/inbound`,
       toolUrls: {
         sendDemoLink: `${config.publicUrl}/tools/send-demo-link`,
         doNotCall: `${config.publicUrl}/tools/do-not-call`,
@@ -188,6 +189,19 @@ export async function handleRequest(ctx, req) {
     await ctx.queue.poke();
     return ok({ results });
   }
+  // Points the Twilio number's incoming calls at the AI, so callbacks are answered.
+  if (method === 'POST' && path === '/api/setup/inbound') {
+    const tw = config.twilio;
+    if (!tw.accountSid || !tw.authToken || !tw.fromNumber) return ok({ error: 'Add your Twilio details first' }, 400);
+    if (!/^https:\/\//.test(config.publicUrl)) return ok({ error: `Your address must start with https:// (it's ${config.publicUrl})` }, 400);
+    try {
+      await setInboundUrl(tw, `${config.publicUrl}/twilio/inbound`);
+    } catch (err) {
+      return ok({ error: err.message }, 400);
+    }
+    return ok({ ok: true, voiceUrl: `${config.publicUrl}/twilio/inbound` });
+  }
+
   if (method === 'POST' && path === '/api/queue/clear') {
     await clearQueue(ctx);
     return ok(await queueState(ctx));

@@ -10,6 +10,7 @@ import { renderPrompt, firstGreeting, realtimeTools } from './agent.js';
 import { streamToken, hangUp } from './twilio.js';
 import {
   sendDemoLink, markDoNotCall, recordCallResult, recordVoicemail, analyzeCall, isMachine, transferAvailable, startTransfer,
+  UNKNOWN_CALLER,
 } from './actions.js';
 import { safeEqual } from './crypto.js';
 
@@ -108,6 +109,7 @@ export class CallBridge {
     this.callSid = call.call_sid || start.callSid;
     this.lead = lead;
     this.resumed = resume;
+    this.inbound = call.direction === 'inbound';
     if (resume) {
       this.transcript = JSON.parse(call.transcript || '[]');
       this.startedAt = Date.parse(`${call.created_at.replace(' ', 'T')}Z`) || this.startedAt; // time limit counts the whole call
@@ -130,7 +132,9 @@ export class CallBridge {
     }
     // The caller hung up while we were connecting: don't leave a paid AI session running.
     if (this.closed) return this.openai.close();
-    const guard = this.config.calling.amdEnabled && !this.resumed;
+    // Voicemail detection only exists on calls we place; someone calling us is a person.
+    const guard = this.config.calling.amdEnabled && !this.resumed && !this.inbound;
+    const inbound = this.inbound ? (this.lead.business_name === UNKNOWN_CALLER ? 'unknown' : 'known') : null;
     this.transferOk = !this.resumed && transferAvailable(this.config, this.lead);
     const transfer = this.resumed ? 'missed' : this.transferOk ? 'available' : 'unavailable';
     this.sendOpenAI({
@@ -140,7 +144,7 @@ export class CallBridge {
         model: realtimeModel,
         output_modalities: ['audio'],
         instructions: renderPrompt(this.promptTemplate, this.lead, this.config.seller,
-          { recording: this.config.recordCalls, transfer, history: this.transcript }),
+          { recording: this.config.recordCalls, transfer, history: this.transcript, inbound }),
         audio: {
           input: {
             format: { type: 'audio/pcmu' },
@@ -163,8 +167,8 @@ export class CallBridge {
         if (this.heardDuringGuard) this.sendOpenAI({ type: 'response.create' });
       });
     }
-    if (this.resumed) {
-      this.sendOpenAI({ type: 'response.create' }); // apologize and carry on (see the prompt)
+    if (this.resumed || this.inbound) {
+      this.sendOpenAI({ type: 'response.create' }); // they're waiting: answer / apologize right away (see the prompt)
     } else {
       // People usually answer with "Hello?" first. If they stay silent, open the call ourselves.
       this.greetTimer = this.later(3500, () => {
@@ -356,6 +360,7 @@ export class CallBridge {
           decision_maker_name: analysis.decision_maker_name || null,
           next_step: analysis.next_step || null,
           requests: analysis.requests || null,
+          business_name: analysis.business_name || null,
         },
         duration,
       });

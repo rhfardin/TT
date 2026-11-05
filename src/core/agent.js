@@ -48,10 +48,24 @@ export function promptVariables(lead, seller) {
 // recording: calls are recorded, so the AI must say so (some US states require everyone's consent).
 // transfer: 'available' (the owner can be connected live), 'unavailable', or 'missed' (we just tried and
 //   he didn't pick up; history holds the conversation so far, so the AI can pick it back up).
-export function renderPrompt(template, lead, seller, { recording = false, transfer = 'unavailable', history = [] } = {}) {
+// inbound: 'known' (a business from the list calling back) or 'unknown' (a number we don't have).
+export function renderPrompt(template, lead, seller, { recording = false, transfer = 'unavailable', history = [], inbound = null } = {}) {
   const vars = promptVariables(lead, seller);
   const name = seller.yourName || 'the owner';
   let extra = lead.email ? `\n\n# Email on file\nThe email we have on file is ${lead.email}. Confirm it before sending.` : '';
+  if (inbound === 'known') {
+    extra += `\n\n# This is an incoming call\nThey are calling you: ${lead.business_name}, probably returning a call or replying to ` +
+      `${name}'s email about the website preview. This replaces the opening above: you answer the phone, so speak first, right away. ` +
+      `Something like: "Hi, thanks for calling back! This is ${seller.agentName}, an AI assistant for ${name}. ` +
+      `Are you calling about the new website for ${lead.business_name}?" Then carry on as above, and close like you normally would.`;
+  } else if (inbound === 'unknown') {
+    extra += `\n\n# This is an incoming call from a number we don't know\nIgnore the details above about a specific business: ` +
+      `you don't know who is calling. Speak first, right away: "Hi, thanks for calling ${name}, this is ${seller.agentName}, ` +
+      `an AI assistant. How can I help?" Find out their name, their business and why they're calling. If they're a business owner ` +
+      `calling about a website preview or ${name}'s email, get the business name and their email, explain the free redesign and ` +
+      `continue as above (if there's no preview on file, say ${name} will email it today). For anything else, take a message: ` +
+      `name, business, best number or email, and what it's about, and say ${name} will get back to them.`;
+  }
   if (recording) {
     extra += '\n\n# This call is recorded\nIn your opening, right after saying you are an AI, add "and just so you know, this call is recorded." ' +
       'If they object, apologize, tell them you will make a note, and continue only if they are fine with it.';

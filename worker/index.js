@@ -9,7 +9,7 @@ import { handleRequest } from '../src/core/api.js';
 import { runDue } from '../src/core/queue.js';
 import {
   handleTwilioStatus, handleTwilioAmd, handleTwilioRecording, handleTwilioWhisper, handleTwilioWhisperAnswer,
-  handleTwilioTransferResult, verifyElevenLabsSignature, handleElevenLabsWebhook,
+  handleTwilioTransferResult, handleTwilioInbound, verifyElevenLabsSignature, handleElevenLabsWebhook,
 } from '../src/core/actions.js';
 import { validTwilioSignature } from '../src/core/twilio.js';
 import { resendSender } from '../src/core/email.js';
@@ -106,6 +106,7 @@ async function handle(request, env) {
     '/twilio/whisper': handleTwilioWhisper,
     '/twilio/whisper-answer': handleTwilioWhisperAnswer,
     '/twilio/transfer-result': handleTwilioTransferResult,
+    '/twilio/inbound': handleTwilioInbound,
   };
   if (request.method === 'POST' && twilioHandlers[path]) {
     const params = Object.fromEntries(new URLSearchParams(await request.text()));

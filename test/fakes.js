@@ -19,6 +19,7 @@ export async function startApp(env = {}) {
     sms: [],
     updates: [], // { sid, twiml } for live calls redirected (transfers)
     failUpdates: false,
+    numberUpdates: [], // changes to the Twilio number's settings (incoming call URL)
     lastTwiml: null, // what our server answered to the last signed Twilio webhook
   };
 
@@ -45,6 +46,13 @@ export async function startApp(env = {}) {
     url = String(url);
     if (url.includes('api.twilio.com')) {
       const body = Object.fromEntries(new URLSearchParams(opts.body || ''));
+      if (url.includes('/IncomingPhoneNumbers.json?')) {
+        return new Response(JSON.stringify({ incoming_phone_numbers: [{ sid: 'PN1', phone_number: process.env.TWILIO_FROM_NUMBER }] }));
+      }
+      if (/\/IncomingPhoneNumbers\/\w+\.json$/.test(url)) {
+        fake.numberUpdates.push(body);
+        return new Response('{}');
+      }
       if (url.endsWith('/Messages.json')) {
         fake.sms.push(body);
         return new Response(JSON.stringify({ sid: 'SM1' }), { status: 201 });
