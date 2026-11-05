@@ -3,14 +3,15 @@
 // returns { status, json, headers? } or, for files, { status, raw: { body, contentType, filename? } }
 // ctx = { config, env, store, sendEmail, queue: { poke() } }
 //   env: the raw environment variables (saved dashboard settings are layered on top of them in config)
-import { rowsToLeads, normalizePhone } from './leads.js';
+import { rowsToLeads, normalizePhone, leadTimezone } from './leads.js';
 import { settingsForDashboard, cleanSettingsUpdate } from './settings.js';
 import {
   placeCall, sendDemoLink, markDoNotCall, providerProblem, checkAvailability, bookMeeting, UNKNOWN_CALLER,
 } from './actions.js';
 import { calcomReady, getSlots, spokenTime } from './calcom.js';
 import { enqueueLeads, queueState, clearQueue } from './queue.js';
-import { randomToken, secretEqual, verifyPassword } from './crypto.js';
+import { randomToken, secretEqual, verifyPassword, hashPassword } from './crypto.js';
+import { webhookSecret } from './notify.js';
 import { fetchRecording, setInboundUrl } from './twilio.js';
 
 const ok = (json, status = 200, headers) => ({ status, json, headers });
@@ -122,6 +123,22 @@ export async function handleRequest(ctx, req) {
       counts: await store.statusCounts(),
       needsYou: await store.countNeedsYou(),
     });
+  }
+
+  // Change the dashboard password. Stored as a hash (it then replaces ADMIN_PASSWORD); every other
+  // logged-in browser is signed out.
+  if (method === 'POST' && path === '/api/password') {
+    if (!(await checkPassword(ctx, String(body.current ?? '')))) return ok({ error: 'Your current password is wrong' }, 400);
+    const next = String(body.next ?? '');
+    if (next.length < 10) return ok({ error: 'Use at least 10 characters for the new password' }, 400);
+    if (next.length > 200) return ok({ error: 'That password is too long' }, 400);
+    await store.saveSettings({ ADMIN_PASSWORD_HASH: await hashPassword(next) });
+    await store.deleteOtherSessions(sessionId);
+    return ok({ ok: true });
+  }
+
+  if (method === 'GET' && path === '/api/webhook-secret') {
+    return ok({ secret: config.alerts.webhookUrl ? await webhookSecret(store) : null });
   }
 
   if (path === '/api/settings') {
@@ -258,6 +275,8 @@ export async function handleRequest(ctx, req) {
 
   if (method === 'GET' && path === '/api/leads') {
     const [leads, total] = await Promise.all([store.listLeads(req.query), store.countLeads(req.query)]);
+    // Each business's timezone, so the dashboard can show what time it is there.
+    for (const l of leads) l.tz = leadTimezone(l, config.calling);
     return ok({ leads, total });
   }
 
@@ -267,6 +286,7 @@ export async function handleRequest(ctx, req) {
       const lead = await store.getLead(id);
       if (!lead) return ok({ error: 'not found' }, 404);
       lead.next_call_at = await store.nextCallAt(id);
+      lead.tz = leadTimezone(lead, config.calling);
       const calls = (await store.callsForLead(id))
         .map((c) => ({ ...c, transcript: JSON.parse(c.transcript || '[]'), outcome: JSON.parse(c.outcome || 'null') }));
       return ok({ lead, calls, events: await store.eventsForLead(id) });

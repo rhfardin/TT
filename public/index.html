@@ -84,6 +84,8 @@
   .settings { max-width: 720px; }
   .settings h2 { margin: 0 0 4px; font-size: 17px; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-top: 12px; }
+  .grid > * { min-width: 0; }
+  code { word-break: break-all; }
   .grid .full { grid-column: 1 / -1; }
   label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 4px; }
   .help { font-size: 13px; color: var(--muted); margin-top: 3px; font-weight: 400; }
@@ -406,6 +408,13 @@
               <div class="help">One short reminder with the preview link, only if they haven't said yes or no and you haven't clicked Done.</div></div>
             <div class="full"><label>Business postal address</label><input name="BUSINESS_ADDRESS" placeholder="Rizer Web, street address, city, state ZIP">
               <div class="help">Required for follow-up emails: US law (CAN-SPAM) needs a real postal address in marketing emails.</div></div>
+            <div><label>Morning summary email</label>
+              <select name="SUMMARY_EMAIL"><option value="false">Off</option><option value="true">On: yesterday's calls and who needs you</option></select></div>
+            <div><label>Send it at</label><select name="SUMMARY_HOUR"></select>
+              <div class="help">In your default timezone (section 5). Skipped on days with nothing to report.</div></div>
+            <div class="full"><label>Also send hot leads to (webhook)</label><input name="WEBHOOK_URL" placeholder="https://hooks.zapier.com/hooks/catch/…">
+              <div class="help">Optional. Each hot lead is POSTed here as JSON, e.g. to a Zapier or Make "catch hook" that adds a row to Google Sheets or your CRM.
+                <span id="webhookSecretLine" hidden>Signed with header X-AI-Caller-Signature (HMAC-SHA256), secret: <code id="webhookSecret"></code></span></div></div>
           </div>
         </div>
 
@@ -425,6 +434,16 @@
         </div>
 
         <div class="savebar"><button class="primary">Save settings</button><span id="saveResult" class="muted"></span></div>
+      </form>
+
+      <form class="card" id="passwordForm" style="margin-top:16px">
+        <h2>Your dashboard password</h2>
+        <div class="grid">
+          <div><label>Current password</label><input type="password" name="current" autocomplete="current-password" required></div>
+          <div><label>New password</label><input type="password" name="next" autocomplete="new-password" minlength="10" required>
+            <div class="help">At least 10 characters. Every other browser that's logged in is signed out.</div></div>
+        </div>
+        <div class="row" style="margin-top:10px"><button class="primary">Change password</button><span id="passwordResult" class="muted"></span></div>
       </form>
     </section>
   </main>
@@ -489,6 +508,10 @@ const when = (iso) => {
   if (Math.abs(ms) < 60000) return ms > 0 ? 'soon' : 'just now';
   if (ms < 0 && ms > -864e5) return -ms < 3600e3 ? `${Math.round(-ms / 60000)} min ago` : `${Math.round(-ms / 3600e3)}h ago`;
   return d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+};
+// What time it is for the business ("9:14 AM there").
+const theirTime = (tz) => {
+  try { return tz ? new Date().toLocaleTimeString([], { timeZone: tz, hour: 'numeric', minute: '2-digit' }) : ''; } catch { return ''; }
 };
 // Shown in the list: a lead waiting in the queue says when it will be called.
 const leadPill = (l) => (l.next_call_at && l.status !== 'calling'
@@ -713,7 +736,7 @@ function render() {
       leads.map((l) => `
       <div class="item" data-id="${l.id}">
         <input type="checkbox" class="sel" data-id="${l.id}" ${selected.has(l.id) ? 'checked' : ''}>
-        <div><div class="name">${esc(l.business_name)}</div><div class="sub">${esc([l.category, l.city].filter(Boolean).join(' · '))}</div></div>
+        <div><div class="name">${esc(l.business_name)}</div><div class="sub">${esc([l.category, l.city, theirTime(l.tz) && `${theirTime(l.tz)} there`].filter(Boolean).join(' · '))}</div></div>
         <div class="c-phone">${l.phone.startsWith('hidden:') ? 'Hidden number' : esc(l.phone)}</div>
         <div class="c-status">${leadPill(l)}</div>
         <div class="c-summary summary">${esc(l.last_summary || '')}</div>
@@ -863,7 +886,8 @@ async function openLead(id, { refreshing = false } = {}) {
   const link = (u) => u ? `<a href="${esc(/^https?:/.test(u) ? u : 'https://' + u)}" target="_blank" rel="noopener">${esc(u)}</a>` : '';
   const rows = [['Owner', esc(lead.contact_name)], ['Phone', hidden ? 'Hidden number' : esc(lead.phone)], ['Email', esc(lead.email)],
     ['Website', link(lead.website)], ['Redesign', link(lead.demo_link)], ['Category', esc(lead.category)],
-    ['City', esc(lead.city)], ['Follow up', esc(lead.meeting_time)], ['Notes', esc(lead.notes)]].filter((r) => r[1]);
+    ['City', esc(lead.city)], ['Their time', lead.tz ? `${esc(theirTime(lead.tz))} <span class="muted">(${esc(lead.tz)})</span>` : ''],
+    ['Follow up', esc(lead.meeting_time)], ['Notes', esc(lead.notes)]].filter((r) => r[1]);
   if (editing) {
     if (live) liveTimer = setTimeout(() => openLead(id, { refreshing: true }), 2000);
     return;
@@ -940,13 +964,15 @@ async function openLead(id, { refreshing = false } = {}) {
 const hours = Array.from({ length: 25 }, (_, h) => `<option value="${h}">${h === 0 || h === 24 ? '12 am' : h < 12 ? h + ' am' : h === 12 ? '12 pm' : (h - 12) + ' pm'}</option>`).join('');
 document.querySelector('[name=CALL_WINDOW_START]').innerHTML = hours;
 document.querySelector('[name=CALL_WINDOW_END]').innerHTML = hours;
+document.querySelector('[name=SUMMARY_HOUR]').innerHTML = hours.replace(/<option value="24">[^<]*<\/option>/, '');
 $('#days').innerHTML = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
   .map((d, i) => `<label><input type="checkbox" value="${i + 1}"> ${d}</label>`).join('');
 
 const DEFAULTS = { OPENAI_REALTIME_MODEL: 'gpt-realtime-mini', OPENAI_VOICE: 'marin', CALL_WINDOW_START: '9', CALL_WINDOW_END: '17',
   CALL_DAYS: '1,2,3,4,5', DEFAULT_TIMEZONE: 'America/New_York', DEFAULT_COUNTRY_CODE: '1', CALL_SPACING_SECONDS: '90', MAX_ATTEMPTS: '3', AGENT_NAME: 'Alex',
   AMD_ENABLED: 'true', MAX_CALL_SECONDS: '420', RETRY_NO_ANSWER_HOURS: '24', RETRY_VOICEMAIL_HOURS: '48', RECORD_CALLS: 'false',
-  TRANSFER_ENABLED: 'false', FOLLOWUP_DAYS: '0', MAX_CALLS_PER_DAY: '80', SILENCE_SECONDS: '20', LUNCH_BREAK: 'false', DAILY_SPEND_LIMIT: '0' };
+  TRANSFER_ENABLED: 'false', FOLLOWUP_DAYS: '0', MAX_CALLS_PER_DAY: '80', SILENCE_SECONDS: '20', LUNCH_BREAK: 'false', DAILY_SPEND_LIMIT: '0',
+  SUMMARY_EMAIL: 'false', SUMMARY_HOUR: '8' };
 
 let loadedSettings = {};
 async function loadDnc() {
@@ -1003,6 +1029,10 @@ async function loadSettings() {
     el.value = v;
     loadedSettings[key] = el.value;
   }
+  api('/api/webhook-secret').then((r) => {
+    $('#webhookSecretLine').hidden = !r.secret;
+    $('#webhookSecret').textContent = r.secret || '';
+  }).catch(() => {});
   const days = (s.CALL_DAYS || DEFAULTS.CALL_DAYS).split(',');
   document.querySelectorAll('#days input').forEach((cb) => (cb.checked = days.includes(cb.value)));
   loadedSettings.CALL_DAYS = days.join(',');
@@ -1023,6 +1053,15 @@ $('#settingsForm').onsubmit = async (e) => {
     setTimeout(() => ($('#saveResult').textContent = ''), 3000);
     loadSettings(); loadStatus();
   } catch (err) { $('#saveResult').textContent = err.message; }
+};
+
+$('#passwordForm').onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await api('/api/password', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(e.target))) });
+    e.target.reset();
+    $('#passwordResult').textContent = 'Changed. Use the new password from now on.';
+  } catch (err) { $('#passwordResult').textContent = err.message; }
 };
 
 $('#testCalcom').onclick = async () => {

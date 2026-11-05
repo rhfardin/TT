@@ -52,6 +52,9 @@ export const SETTINGS = [
   { key: 'ALERT_EMAIL' },
   { key: 'FOLLOWUP_DAYS' },
   { key: 'BUSINESS_ADDRESS' },
+  { key: 'SUMMARY_EMAIL' },
+  { key: 'SUMMARY_HOUR' },
+  { key: 'WEBHOOK_URL' },
   { key: 'CALCOM_API_KEY', secret: true },
   { key: 'CALCOM_USERNAME' },
   { key: 'CALCOM_EVENT_SLUG' },
@@ -94,6 +97,9 @@ const VALIDATE = {
   TRANSFER_ENABLED: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
   ALERT_EMAIL: (v) => (/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(v) ? null : 'must be an email address'),
   FOLLOWUP_DAYS: int(0, 30),
+  SUMMARY_EMAIL: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
+  SUMMARY_HOUR: int(0, 23),
+  WEBHOOK_URL: (v) => (/^https:\/\/[^\s/]+\.[^\s]+$/.test(v) && !/^https:\/\/(localhost|127\.|10\.|192\.168\.)/i.test(v) ? null : 'must be a public https:// address'),
   CALCOM_USERNAME: (v) => (/^[\w.-]+$/.test(v) ? null : 'is the part after cal.com/ in your booking link'),
   CALCOM_EVENT_SLUG: (v) => (/^[\w.-]+$/.test(v) ? null : 'is the last part of your event link, like 15min'),
   TRANSFER_PHONE: (v) => (/^\+\d{8,15}$/.test(v) ? null : 'must look like +15551234567'),
@@ -107,7 +113,8 @@ const LABELS = {
   TRANSFER_ENABLED: 'Live transfer', TRANSFER_PHONE: 'Your phone for transfers', MAX_CALLS_PER_DAY: 'Calls per day', SILENCE_SECONDS: 'Hang up after silence',
   CALLING_PAUSED: 'Pause all calling', NO_CALL_DATES: 'Days off', LUNCH_BREAK: 'Lunch break', DAILY_SPEND_LIMIT: 'Daily spend limit',
   CALCOM_USERNAME: 'Cal.com username', CALCOM_EVENT_SLUG: 'Cal.com event',
-  ALERT_EMAIL: 'Alert email', FOLLOWUP_DAYS: 'Follow-up email',
+  ALERT_EMAIL: 'Alert email', FOLLOWUP_DAYS: 'Follow-up email', SUMMARY_EMAIL: 'Morning summary', SUMMARY_HOUR: 'Summary time',
+  WEBHOOK_URL: 'Webhook address',
 };
 
 const PHONES = ['TRANSFER_PHONE', 'TWILIO_FROM_NUMBER'];

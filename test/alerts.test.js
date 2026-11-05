@@ -3,7 +3,9 @@ import { test, after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, waitFor } from './fakes.js';
 import { makeCtx, lead as makeLead } from './helpers.js';
-import { sendDueFollowups } from '../src/core/notify.js';
+import { sendDueFollowups, notifyOwner, sendMorningSummary, webhookSecret } from '../src/core/notify.js';
+import { hmacHex } from '../src/core/crypto.js';
+import { localDate, zonedDate } from '../src/core/leads.js';
 
 const app = await startApp({
   RESEND_API_KEY: 're_test', EMAIL_FROM: 'Fardin <hello@rhfardin.com>', ALERT_EMAIL: 'fardin@example.com',
@@ -106,4 +108,46 @@ test('follow-ups: skipped once the owner handled the lead, given up after 3 fail
   assert.equal(tries, 3, 'the handled lead is never emailed; the bad address is tried 3 times');
   assert.equal((await store.getLead(1)).followup_sent_at, 'skipped');
   assert.equal((await store.getLead(2)).followup_sent_at, 'failed');
+});
+
+test('hot leads are posted to the webhook, signed', async () => {
+  const { ctx, store } = await makeCtx({ WEBHOOK_URL: 'https://hooks.example.com/abc', PUBLIC_URL: 'https://calls.example.com' });
+  await store.upsertLeads([makeLead({ phone: '+15125550921', business_name: 'Hook Spa', email: 'h@h.test' })]);
+  const posts = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => { posts.push({ url, opts }); return new Response('ok'); };
+  try {
+    await notifyOwner(ctx, await store.getLead(1), { reason: 'Interested', summary: 'Wants it.', collected: { next_step: 'Send price' } });
+  } finally { globalThis.fetch = realFetch; }
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].url, 'https://hooks.example.com/abc');
+  const body = JSON.parse(posts[0].opts.body);
+  assert.equal(body.event, 'hot_lead');
+  assert.equal(body.reason, 'Interested');
+  assert.equal(body.lead.business_name, 'Hook Spa');
+  assert.equal(body.lead.phone, '+15125550921');
+  assert.equal(body.next_step, 'Send price');
+  assert.equal(body.dashboard_url, 'https://calls.example.com/#lead-1');
+  const secret = await webhookSecret(store);
+  assert.equal(posts[0].opts.headers['X-AI-Caller-Signature'], `sha256=${await hmacHex(secret, posts[0].opts.body)}`);
+  assert.equal(await webhookSecret(store), secret, 'the secret stays the same');
+});
+
+test('the morning summary goes once a day, after the chosen hour', async () => {
+  const { ctx, store, sent } = await makeCtx({ SUMMARY_EMAIL: 'true', SUMMARY_HOUR: '8', ALERT_EMAIL: 'f@x.test', DEFAULT_TIMEZONE: 'America/New_York' });
+  await store.upsertLeads([makeLead({ phone: '+15125550931', business_name: 'Morning Dental' })]);
+  const callId = await store.insertCall(1);
+  await store.updateCall(callId, { status: 'completed', talked: 1, cost_cents: 42, outcome: JSON.stringify({ outcome: 'interested' }) });
+  await store.updateLead(1, { hot_at: new Date().toISOString(), hot_reason: 'Interested', last_summary: 'Liked it.' });
+  const today = localDate('America/New_York');
+  assert.equal(await sendMorningSummary(ctx, zonedDate(today, 7, 30, 'America/New_York')), false, 'too early');
+  assert.equal(await sendMorningSummary(ctx, zonedDate(today, 8, 10, 'America/New_York')), true);
+  assert.equal(await sendMorningSummary(ctx, zonedDate(today, 9, 0, 'America/New_York')), false, 'once a day');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, 'f@x.test');
+  assert.equal(sent[0].subject, 'AI caller: 1 call, 1 needs you');
+  assert.match(sent[0].text, /Calls: 1 \(1 talked/);
+  assert.match(sent[0].text, /Interested: 1/);
+  assert.match(sent[0].text, /Estimated spend: \$0\.42/);
+  assert.match(sent[0].text, /- Morning Dental \(Interested\), \+15125550931\n  Liked it\./);
 });

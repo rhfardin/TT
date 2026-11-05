@@ -73,3 +73,21 @@ test('days off must be real dates; spend limit in dollars', async () => {
   assert.equal(s.today.spendLimitCents, 750);
   assert.equal((await app.api('PUT', '/api/settings', { CALLING_PAUSED: 'false' })).status, 200);
 });
+
+test('each business shows its own timezone', async () => {
+  const { leads } = (await app.api('GET', '/api/leads?q=Biz 0')).body;
+  assert.equal(leads[0].tz, 'America/Chicago'); // 512 = Austin
+});
+
+test('changing the password signs out every other browser', async () => {
+  const other = await app.realFetch(`${app.base}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' }, body: JSON.stringify({ password: 'pw' }) });
+  const otherCookie = other.headers.get('set-cookie').split(';')[0];
+  assert.equal((await app.api('POST', '/api/password', { current: 'wrong', next: 'a-long-new-password' })).status, 400);
+  assert.match((await app.api('POST', '/api/password', { current: 'pw', next: 'short' })).body.error, /10 characters/);
+  assert.equal((await app.api('POST', '/api/password', { current: 'pw', next: 'a-long-new-password' })).status, 200);
+  assert.equal((await app.api('GET', '/api/status')).status, 200, 'this browser stays logged in');
+  const otherNow = await app.realFetch(`${app.base}/api/status`, { headers: { cookie: otherCookie, 'X-Requested-With': 'fetch' } });
+  assert.equal(otherNow.status, 401);
+  assert.equal((await app.api('POST', '/api/login', { password: 'pw' })).status, 401, 'old password no longer works');
+  assert.equal((await app.api('POST', '/api/login', { password: 'a-long-new-password' })).status, 200);
+});

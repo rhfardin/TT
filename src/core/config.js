@@ -52,6 +52,11 @@ export function buildConfig(e) {
       email: env('ALERT_EMAIL'),
       followupDays: num('FOLLOWUP_DAYS', 0, 0, 30), // 0 = off
       businessAddress: env('BUSINESS_ADDRESS'), // US law (CAN-SPAM) needs a postal address in follow-up emails
+      // A short email every morning: yesterday's calls, who needs you, what's queued today.
+      summaryEmail: env('SUMMARY_EMAIL', 'false') === 'true',
+      summaryHour: num('SUMMARY_HOUR', 8, 0, 23), // in DEFAULT_TIMEZONE
+      // Hot leads are also POSTed here as JSON (Zapier, Make, a Google Sheet script...). https only.
+      webhookUrl: /^https:\/\//.test(env('WEBHOOK_URL')) ? env('WEBHOOK_URL') : '',
     },
 
     // Cal.com: the AI offers open times and books calls with the owner during the call.

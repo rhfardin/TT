@@ -63,6 +63,12 @@ export function createStore(db) {
       const f = leadFilter(filter);
       return (await db.get(`SELECT COUNT(*) AS n FROM leads WHERE ${f.sql}`, ...f.args)).n;
     },
+    // Small bits of app state (schema version, last summary date, webhook secret).
+    getMeta: async (key) => (await db.get('SELECT value FROM meta WHERE key = ?', key))?.value ?? null,
+    setMeta: (key, value) => db.run('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, String(value)),
+    // Sets key to value unless it already is; true if this call changed it (so only one copy does a job).
+    claimMeta: async (key, value) => (await db.run(`INSERT INTO meta (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE meta.value IS NOT excluded.value`, key, String(value))).changes === 1,
     // Hot leads the owner hasn't dealt with yet, newest first.
     needsYou: () => db.all(`SELECT * FROM leads WHERE is_test = 0 AND hot_at IS NOT NULL
                             AND (handled_at IS NULL OR handled_at < hot_at) ORDER BY hot_at DESC LIMIT 100`),
@@ -215,6 +221,7 @@ export function createStore(db) {
     createSession: (id, expiresIso) => db.run('INSERT INTO sessions (id, expires_at) VALUES (?, ?)', id, expiresIso),
     sessionValid: async (id) => Boolean(id && (await db.get('SELECT 1 AS ok FROM sessions WHERE id = ? AND expires_at > ?', id, new Date().toISOString()))),
     deleteSession: (id) => db.run('DELETE FROM sessions WHERE id = ?', id),
+    deleteOtherSessions: (keepId) => db.run('DELETE FROM sessions WHERE id != ?', String(keepId)),
     recentLoginFailuresAll: async (sinceIso) => (await db.get('SELECT COUNT(*) AS n FROM login_attempts WHERE at > ?', sinceIso)).n,
     recentLoginFailures: async (key, sinceIso) =>
       (await db.get('SELECT COUNT(*) AS n FROM login_attempts WHERE key = ? AND at > ?', key, sinceIso)).n,
