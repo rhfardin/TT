@@ -26,6 +26,7 @@ Your sheet (.xlsx/.csv) ──► Dashboard (your domain) ──► "Call" ─�
 - **Script editor and A/B testing.** The **Script** tab edits what the AI is told before every call, with a reset to the built-in script. Write a second version (script B) and start a campaign with "Split A and B" to see which one gets more interested businesses. Saying it's an AI is always added, whatever the script says.
 - **Results.** The **Results** tab shows calls, how many reached a person, interested and said yes, average conversation length, and estimated spend (from OpenAI's reported usage and Twilio's prices), by campaign, script version, type of business and day.
 - **Export and edits.** **Export** downloads every business with its status, last summary, next step and requests as a spreadsheet (CSV, opens in Excel or Google Sheets). Edit any business's details from its page, or tick several and set their status at once. During a call, the business's page shows the conversation live.
+- **Do-not-call list and daily limit.** Paste numbers into Settings → Do-not-call list, and they're never called, whatever a sheet says; anyone who asks the AI not to call again is added automatically. A daily limit (80 calls per 24 hours by default) keeps a steady pace; the queue simply waits when it's reached.
 - **Callbacks answered.** When a business calls your Twilio number back, the AI answers right away, any time of day. It recognizes businesses from your list by their number and picks up the conversation; for unknown numbers it finds out who's calling and takes a message. A retry call that was waiting for that business is cancelled. To switch it on, click **Set it up for me** in Settings → When businesses call you back, once.
 - **Recordings (optional).** Turn on in Settings to play calls back in the dashboard; the AI then says the call is recorded.
 - **Personalized pitch.** Each call gets the business's name, category, city, current site and your notes. The script is in [`prompts/sales-agent.md`](prompts/sales-agent.md); edit it freely.
@@ -123,6 +124,19 @@ Add yourself as a row in the sheet (with your own phone number), upload it, and 
 4. Copy the agent ID and API key into `.env` and set `VOICE_PROVIDER=elevenlabs`.
 
 With ElevenLabs, Twilio's voicemail detection, the Settings recording switch, live transfer and answering callbacks don't apply, because ElevenLabs runs the calls (it answers your number itself once the number is imported there). For booking, add two more webhook tools like the ones above: `check_availability` → `https://<domain>/tools/check-availability` (body: `lead_id`, `day`) and `book_meeting` → `https://<domain>/tools/book-meeting` (body: `lead_id`, `start`, `name`, `email`). For transfers, add ElevenLabs' built-in **Transfer to number** system tool with your phone number, and tell the agent to use it only when the owner asks to speak to you. Turn on the agent's **Voicemail detection** system tool and recording in ElevenLabs instead. The call queue, calling hours and automatic retries work the same with both.
+
+## Keeping your number from being marked "Spam Likely"
+
+Phone carriers label numbers from what they see: verified caller ID, how many calls, how short, and complaints. Do these once:
+
+1. **Register your business in Twilio Trust Hub** (Twilio Console → Trust Hub → Customer Profiles). Then add a **SHAKEN/STIR Trust Product** for your number, so your calls get the highest verification level ("A attestation").
+2. **Set your caller name (CNAM)** in Trust Hub, so people see "Rizer Web" instead of just a number.
+3. **Register the number for free at the Free Caller Registry** (freecallerregistry.com). The big US carriers' spam-labeling partners use it.
+4. **Use a local number** in the area code most of your businesses are in. People pick up local numbers more often.
+5. **Ramp up slowly.** Start around 30–50 calls a day and raise the daily limit in Settings once things look good; keep the gap between calls.
+6. **Don't keep buying new numbers to dodge labels.** Carriers treat that pattern as spam, and Twilio can suspend accounts for it.
+
+Your system already helps: it says it's an AI, honors "don't call me again" instantly, calls only in each business's local hours, stops after the max tries, and paces itself.
 
 ## Calling the right way (read this)
 

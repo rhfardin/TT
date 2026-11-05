@@ -401,6 +401,18 @@
           </div>
         </div>
 
+        <div class="card">
+          <h2>11. Do-not-call list and daily limit</h2>
+          <p class="muted" style="margin:0">Numbers on this list are never called, whatever your sheets say. Anyone who asks the AI not to call again is added automatically.</p>
+          <label style="margin-top:12px">Add numbers <span class="help">one per line, or separated by commas</span></label>
+          <textarea id="dncNumbers" placeholder="(512) 555-0100&#10;+1 305 555 0100"></textarea>
+          <div class="row" style="margin-top:8px"><button type="button" id="addDnc">Add to the list</button><span id="dncResult" class="muted"></span></div>
+          <div class="grid">
+            <div><label>Calls per day</label><input name="MAX_CALLS_PER_DAY" type="number" min="1" max="1000">
+              <div class="help">At most this many calls in any 24 hours. A steady, modest pace (about 50–80 per number) helps keep your number from being marked "Spam Likely".</div></div>
+          </div>
+        </div>
+
         <div class="savebar"><button class="primary">Save settings</button><span id="saveResult" class="muted"></span></div>
       </form>
     </section>
@@ -632,8 +644,11 @@ async function loadStatus() {
 
   const q = s.queue;
   $('#queueBar').hidden = !q.pending && !q.active;
+  const limited = s.today && s.today.calls >= s.today.limit;
   $('#queueText').textContent = `${q.active ? 'On a call now. ' : ''}${q.pending} waiting to be called` +
-    (q.pending && q.nextAt ? `, next ${when(q.nextAt)}` : '') + '. Calls go out one at a time, only during calling hours.';
+    (q.pending && q.nextAt && !limited ? `, next ${when(q.nextAt)}` : '') + '. ' +
+    (limited ? `Daily limit reached (${s.today.limit} calls in 24 hours); calling resumes automatically.` : 'Calls go out one at a time, only during calling hours.') +
+    (s.today ? ` ${s.today.calls} of ${s.today.limit} calls today.` : '');
 }
 $('#stats').onclick = (e) => {
   const b = e.target.closest('[data-group]');
@@ -879,10 +894,23 @@ $('#days').innerHTML = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const DEFAULTS = { OPENAI_REALTIME_MODEL: 'gpt-realtime-mini', OPENAI_VOICE: 'marin', CALL_WINDOW_START: '9', CALL_WINDOW_END: '17',
   CALL_DAYS: '1,2,3,4,5', DEFAULT_TIMEZONE: 'America/New_York', DEFAULT_COUNTRY_CODE: '1', CALL_SPACING_SECONDS: '90', MAX_ATTEMPTS: '3', AGENT_NAME: 'Alex',
   AMD_ENABLED: 'true', MAX_CALL_SECONDS: '420', RETRY_NO_ANSWER_HOURS: '24', RETRY_VOICEMAIL_HOURS: '48', RECORD_CALLS: 'false',
-  TRANSFER_ENABLED: 'false', FOLLOWUP_DAYS: '0' };
+  TRANSFER_ENABLED: 'false', FOLLOWUP_DAYS: '0', MAX_CALLS_PER_DAY: '80' };
 
 let loadedSettings = {};
+async function loadDnc() {
+  const r = await api('/api/dnc');
+  $('#dncResult').textContent = `${r.count} numbers on the list.`;
+}
+$('#addDnc').onclick = async () => {
+  try {
+    const r = await api('/api/dnc', { method: 'POST', body: JSON.stringify({ numbers: $('#dncNumbers').value }) });
+    $('#dncNumbers').value = '';
+    $('#dncResult').textContent = `Added ${r.added}${r.invalid ? ` (${r.invalid} weren't valid numbers)` : ''}. ${r.count} numbers on the list.`;
+  } catch (err) { $('#dncResult').textContent = err.message; }
+};
+
 async function loadSettings() {
+  loadDnc().catch(() => {});
   api('/api/status').then((st) => ($('#inboundUrl').textContent = st.inboundUrl)).catch(() => {});
   const s = await api('/api/settings');
   const form = $('#settingsForm');

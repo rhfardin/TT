@@ -91,6 +91,7 @@ export async function handleRequest(ctx, req) {
       },
       calling: config.calling,
       queue: await queueState(ctx),
+      today: { calls: (await store.callsLast24h()).count, limit: config.calling.maxCallsPerDay },
       webhookUrl: `${config.publicUrl}/webhooks/elevenlabs`,
       inboundUrl: `${config.publicUrl}/twilio/inbound`,
       toolUrls: {
@@ -138,6 +139,7 @@ export async function handleRequest(ctx, req) {
     try {
       const { leads, skipped, duplicates, mapping } = rowsToLeads(body.rows, config.calling.defaultCountryCode);
       await store.upsertLeads(leads);
+      await store.applyDnc();
       await store.logEvent(null, 'import', { filename: body.filename, imported: leads.length, skipped: skipped.length });
       return ok({ imported: leads.length, skipped, duplicates, mapping });
     } catch (err) {
@@ -199,6 +201,20 @@ export async function handleRequest(ctx, req) {
     if (!SETTABLE_STATUSES.includes(body.status)) return ok({ error: 'That status can’t be set by hand' }, 400);
     await store.bulkStatus(ids, body.status);
     return ok({ ok: true });
+  }
+
+  // ---- Do-not-call list ----
+  if (path === '/api/dnc' && method === 'GET') return ok({ count: await store.countDnc(), recent: await store.recentDnc() });
+  if (path === '/api/dnc' && method === 'POST') {
+    // Paste or upload numbers, one per line or separated by commas.
+    const raw = Array.isArray(body.numbers) ? body.numbers : String(body.numbers || '').split(/[\n,;]+/);
+    const phones = [...new Set(raw.map((n) => normalizePhone(String(n), config.calling.defaultCountryCode)).filter(Boolean))].slice(0, 20000);
+    for (let i = 0; i < phones.length; i += 500) await store.addDnc(phones.slice(i, i + 500), String(body.source || 'added by hand').slice(0, 60));
+    return ok({ added: phones.length, invalid: raw.filter((n) => String(n).trim()).length - phones.length, count: await store.countDnc() });
+  }
+  if (method === 'DELETE' && (m = path.match(/^\/api\/dnc\/(\+\d{8,15})$/))) {
+    await store.removeDnc(m[1]);
+    return ok({ ok: true, count: await store.countDnc() });
   }
 
   if (method === 'GET' && path === '/api/needs-you') return ok({ leads: await store.needsYou() });

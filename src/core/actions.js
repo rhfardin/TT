@@ -47,6 +47,13 @@ export async function placeCall(ctx, leadId, opts = {}) {
   if (!check.ok) return { ok: false, error: check.reason };
   const problem = providerProblem(config);
   if (problem) return { ok: false, error: problem };
+  if (await store.isDnc(lead.phone)) {
+    await store.updateLead(lead.id, { status: 'dnc' });
+    return { ok: false, error: 'this number is on your do-not-call list' };
+  }
+  if (!lead.is_test && (await store.callsLast24h()).count >= config.calling.maxCallsPerDay) {
+    return { ok: false, error: `daily limit reached (${config.calling.maxCallsPerDay} calls in 24 hours), to protect your number from spam labels`, limited: true };
+  }
   // Atomic, so a manual call and the queue can never ring the same business twice.
   if (!(await store.claimLeadForCall(lead.id, config.calling.maxAttempts))) {
     return { ok: false, error: 'this business is already being called' };
@@ -431,6 +438,7 @@ export async function markDoNotCall(ctx, { lead_id, reason }) {
   const lead = await ctx.store.getLead(lead_id);
   if (!lead) return { ok: false, message: 'Unknown business.' };
   await ctx.store.updateLead(lead.id, { status: 'dnc' });
+  if (!String(lead.phone).startsWith('hidden:')) await ctx.store.addDnc([lead.phone], 'asked on a call');
   await ctx.store.logEvent(lead.id, 'do_not_call', reason || 'requested on call');
   return { ok: true, message: 'They have been removed from the call list. Apologize briefly and end the call politely.' };
 }

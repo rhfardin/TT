@@ -10,11 +10,13 @@ export async function enqueueLeads(ctx, idList, { ignoreWindow = false, now = ne
   const unique = [...new Set(idList.map(Number).filter(Number.isFinite))].slice(0, 5000);
   const leads = new Map((await store.getLeadsByIds(unique)).map((l) => [l.id, l]));
   const waiting = new Set(await store.queuedLeadIds(unique));
+  const blocked = new Set(await store.dncLeadIds(unique));
   const results = [];
   const accepted = [];
   for (const id of unique) {
     const check = checkLead(leads.get(id), config.calling, { ignoreWindow: true });
     if (!check.ok) results.push({ id, queued: false, reason: check.reason });
+    else if (blocked.has(id)) results.push({ id, queued: false, reason: 'on your do-not-call list' });
     else if (waiting.has(id)) results.push({ id, queued: false, reason: 'already waiting to be called' });
     else {
       accepted.push(id);
@@ -35,6 +37,12 @@ export async function runDue(ctx, now = new Date()) {
   await store.releaseStaleClaims(new Date(now.getTime() - 10 * 60 * 1000).toISOString());
   if (providerProblem(config)) return { placed: false, waitMs: 60 * 1000 }; // keep the queue until keys are added
   if ((await store.activeCallCount()) > 0) return { placed: false, waitMs: 20 * 1000 };
+  // Daily limit reached: wait until the oldest call of the last 24 hours drops out of the count.
+  const day = await store.callsLast24h();
+  if (day.count >= config.calling.maxCallsPerDay) {
+    const frees = Date.parse(`${day.oldest.replace(' ', 'T')}Z`) + 864e5;
+    return { placed: false, waitMs: Math.max(60 * 1000, frees - now.getTime()) };
+  }
 
   for (let i = 0; i < MAX_ITEMS_PER_RUN; i++) {
     const item = await store.nextDueItem(now.toISOString());

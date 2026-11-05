@@ -88,6 +88,8 @@ export function buildConfig(e) {
       spacingSeconds: Number(env('CALL_SPACING_SECONDS', '90')),
       maxAttempts: Number(env('MAX_ATTEMPTS', '3')),
       maxCallSeconds: Number(env('MAX_CALL_SECONDS', '420')),
+      // Calls per 24 hours from one number. A steady, modest pace keeps it from being marked "Spam Likely".
+      maxCallsPerDay: Number(env('MAX_CALLS_PER_DAY', '80')),
       // Twilio answering machine detection: hang up on voicemail within a few seconds.
       amdEnabled: env('AMD_ENABLED', 'true') === 'true',
       // Automatic retries for businesses in the call list (never for test calls or manual one-offs).

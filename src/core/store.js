@@ -213,6 +213,30 @@ export function createStore(db) {
     bulkStatus: (list, status) => db.run('UPDATE leads SET status = ? WHERE id IN (SELECT value FROM json_each(?)) AND status != ?',
       status, ids(list), 'calling'),
 
+    // ---- Do-not-call list ----
+    async addDnc(phones, source) {
+      if (!phones.length) return;
+      const list = JSON.stringify(phones);
+      await db.run('INSERT OR IGNORE INTO dnc_numbers (phone, source) SELECT value, ? FROM json_each(?)', source, list);
+      await db.run("UPDATE leads SET status = 'dnc' WHERE phone IN (SELECT value FROM json_each(?)) AND status != 'calling'", list);
+    },
+    isDnc: async (phone) => Boolean(await db.get('SELECT 1 AS x FROM dnc_numbers WHERE phone = ?', phone)),
+    removeDnc: (phone) => db.run('DELETE FROM dnc_numbers WHERE phone = ?', phone),
+    countDnc: async () => (await db.get('SELECT COUNT(*) AS n FROM dnc_numbers')).n,
+    recentDnc: () => db.all('SELECT * FROM dnc_numbers ORDER BY added_at DESC LIMIT 50'),
+    dncLeadIds: async (list) => (await db.all(`SELECT l.id FROM leads l JOIN dnc_numbers d ON d.phone = l.phone
+                                                WHERE l.id IN (SELECT value FROM json_each(?))`, ids(list))).map((r) => r.id),
+    // After an import: anyone on the list stays "do not call".
+    applyDnc: () => db.run("UPDATE leads SET status = 'dnc' WHERE status NOT IN ('dnc', 'calling') AND phone IN (SELECT phone FROM dnc_numbers)"),
+
+    // ---- Daily call limit (outbound calls in the last 24 hours, test calls left out) ----
+    async callsLast24h() {
+      const r = await db.get(`SELECT COUNT(*) AS n, MIN(c.created_at) AS oldest FROM calls c JOIN leads l ON l.id = c.lead_id
+                              WHERE c.direction = 'outbound' AND l.is_test = 0 AND c.created_at >= datetime(?)`,
+      new Date(Date.now() - 864e5).toISOString());
+      return { count: r.n, oldest: r.oldest };
+    },
+
     // ---- Events and settings ----
     async logEvent(leadId, kind, detail) {
       await db.run('INSERT INTO events (lead_id, kind, detail) VALUES (?, ?, ?)', leadId ?? null, kind,

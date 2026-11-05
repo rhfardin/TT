@@ -135,6 +135,18 @@ export const MIGRATIONS = [
       'CREATE INDEX IF NOT EXISTS idx_calls_created ON calls(created_at)',
     ],
   },
+  {
+    // The owner's own do-not-call list (numbers that must never be called, whatever the sheet says).
+    version: 9,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS dnc_numbers (
+        phone TEXT PRIMARY KEY,
+        source TEXT,
+        added_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+      "INSERT OR IGNORE INTO dnc_numbers (phone, source) SELECT phone, 'asked on a call' FROM leads WHERE status = 'dnc'",
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).version;
