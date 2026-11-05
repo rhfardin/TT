@@ -57,8 +57,9 @@ test('a call\'s transcript shows up while it\'s going on, and its cost and resul
 });
 
 test('export: every business as a spreadsheet, with formulas made harmless', async () => {
-  const res = await app.realFetch(`${app.base}/api/export.csv`, { headers: { cookie: await cookie() } });
+  const res = await app.realFetch(`${app.base}/api/export?format=csv`, { headers: { cookie: await cookie() } });
   assert.equal(res.status, 200);
+  assert.equal(res.headers.get('cache-control'), 'no-store, private', 'never cached by a CDN');
   assert.match(res.headers.get('content-disposition'), /attachment; filename="businesses-\d{4}-\d{2}-\d{2}\.csv"/);
   const text = await res.text();
   const [header, row] = text.replace(/^﻿/, '').split('\r\n');

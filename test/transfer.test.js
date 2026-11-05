@@ -160,3 +160,40 @@ test('the owner hangs up while Fardin\'s phone rings: recorded once, as a callba
   assert.match(body.calls[0].outcome.next_step, /Call them back/);
   assert.equal(body.events.filter((e) => e.kind === 'call_completed').length, 1);
 });
+
+test('like real Twilio, the stream closes the moment the call moves to Fardin: still a transfer', async () => {
+  const c = await startCall();
+  app.fake.onSession = askForFardin;
+  const updatesBefore = app.fake.updates.length;
+  const s = app.mediaStream(c.twilioCall);
+  app.fake.onUpdate = () => s.stop(); // Twilio ends the stream right away
+  await s.ready;
+  const { update } = await transferStarted({ ...c, updatesBefore }, c.callId);
+  app.fake.onUpdate = null;
+  assert.equal(update.body.TimeLimit, '14400', 'the owner\'s conversation isn\'t cut off at the AI\'s time limit');
+  await sleep(150);
+  let call = (await app.api('GET', `/api/leads/${c.lead.id}`)).body.calls[0];
+  assert.equal(call.status, 'transferring', 'not recorded as a normal finished call');
+  // Fardin misses it: the AI comes back (not a hang-up).
+  await app.twilioPost(`/twilio/transfer-result?call=${c.callId}`, { DialCallStatus: 'no-answer' });
+  assert.match(app.fake.lastTwiml, /name="resume" value="1"/);
+});
+
+test('a connected transfer is answered right away and costed with the owner\'s minutes', async () => {
+  const c = await startCall();
+  app.fake.onSession = askForFardin;
+  const updatesBefore = app.fake.updates.length;
+  const s = app.mediaStream(c.twilioCall);
+  await s.ready;
+  await transferStarted({ ...c, updatesBefore }, c.callId);
+  s.stop();
+  await app.twilioPost(`/twilio/whisper-answer?call=${c.callId}`, { Digits: '1' });
+  await app.twilioPost(`/twilio/transfer-result?call=${c.callId}`, { DialCallStatus: 'completed', DialCallDuration: '125' });
+  assert.match(app.fake.lastTwiml, /<Hangup\/>/);
+  const call = await waitFor(async () => {
+    const x = (await app.api('GET', `/api/leads/${c.lead.id}`)).body.calls[0];
+    return x.status === 'completed' && x;
+  });
+  assert.ok(call.duration_secs >= 0);
+  assert.ok(call.cost_cents >= 3 * 1.4, `owner leg (3 min) costed, got ${call.cost_cents}`);
+});

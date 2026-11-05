@@ -74,23 +74,34 @@ export function createStore(db) {
     markInCampaign: (list) => db.run('UPDATE leads SET in_campaign = 1 WHERE id IN (SELECT value FROM json_each(?))', ids(list)),
 
     // Marks the lead as being called, unless something else got there first. Returns true if we got it.
-    async claimLeadForCall(id, maxAttempts) {
-      const r = await db.run(`UPDATE leads SET status = 'calling', attempts = attempts + 1, last_called_at = ?
-                              WHERE id = ? AND attempts < ? AND status NOT IN (SELECT value FROM json_each(?))`,
-      new Date().toISOString(), Number(id), Number(maxAttempts), JSON.stringify(['calling', ...FINAL_STATUSES]));
+    // resetTries: start the count again (a manual "Call now" past the limit).
+    async claimLeadForCall(id, maxAttempts, { resetTries = false } = {}) {
+      const r = await db.run(`UPDATE leads SET status = 'calling', attempts = ${resetTries ? '1' : 'attempts + 1'}, last_called_at = ?
+                              WHERE id = ? AND (? OR attempts < ?) AND status NOT IN (SELECT value FROM json_each(?))`,
+      new Date().toISOString(), Number(id), resetTries ? 1 : 0, Number(maxAttempts), JSON.stringify(['calling', ...FINAL_STATUSES]));
       return r.changes === 1;
     },
-    activeCallCount: async () =>
+    // Calls going on right now (windowMs: how long a call can possibly last).
+    activeCallCount: async (windowMs = 40 * 60 * 1000) =>
       (await db.get(`SELECT COUNT(*) AS n FROM leads WHERE status = 'calling' AND last_called_at > ?`,
-        new Date(Date.now() - 15 * 60 * 1000).toISOString())).n,
+        new Date(Date.now() - windowMs).toISOString())).n,
 
-    // Calls whose result never arrived shouldn't stay "calling" forever.
-    async releaseStuckCalls(olderThanIso) {
-      await db.run(`UPDATE leads SET status = 'no_answer' WHERE status = 'calling' AND (last_called_at IS NULL OR last_called_at < ?)`,
-        olderThanIso);
+    // Calls whose result never arrived shouldn't stay "calling" forever. A lead whose call was being
+    // handed to the owner wanted to talk to him, so it becomes "call back" rather than "no answer".
+    // transferOlderThanIso: the owner's own conversation can run for hours, so transfers get longer.
+    async releaseStuckCalls(olderThanIso, transferOlderThanIso = olderThanIso) {
+      await db.run(`UPDATE leads SET status = CASE WHEN EXISTS (SELECT 1 FROM calls c WHERE c.lead_id = leads.id
+                      AND c.status IN ('transferring', 'finalizing')) THEN 'callback' ELSE 'no_answer' END
+                    WHERE status = 'calling' AND (last_called_at IS NULL OR last_called_at < ?)
+                      AND NOT EXISTS (SELECT 1 FROM calls c WHERE c.lead_id = leads.id AND c.status IN ('transferring', 'finalizing')
+                                      AND c.created_at >= datetime(?))`, olderThanIso, transferOlderThanIso);
       await db.run(`UPDATE calls SET status = 'failed', error = COALESCE(error, 'no result was received for this call')
                     WHERE status IN ('initiated', 'ringing', 'in_progress') AND created_at < datetime(?)`, olderThanIso);
+      await db.run(`UPDATE calls SET status = 'failed', error = COALESCE(error, 'the transfer never finished')
+                    WHERE status IN ('transferring', 'finalizing') AND created_at < datetime(?)`, transferOlderThanIso);
     },
+    hasLiveInboundCall: async (leadId) => Boolean(await db.get(`SELECT 1 AS x FROM calls WHERE lead_id = ? AND direction = 'inbound'
+      AND status IN ('ringing', 'in_progress', 'transferring') AND created_at > datetime(?)`, Number(leadId), new Date(Date.now() - 3600e3).toISOString())),
 
     // ---- Calls ----
     getCall: (id) => db.get('SELECT * FROM calls WHERE id = ?', Number(id)),
@@ -103,9 +114,14 @@ export function createStore(db) {
       return (await db.run(`INSERT INTO calls (lead_id, call_sid, direction, status) VALUES (?, ?, 'inbound', 'ringing')`,
         Number(leadId), callSid)).lastId;
     },
+    getCallBySid: (sid) => db.get('SELECT * FROM calls WHERE call_sid = ? ORDER BY id DESC LIMIT 1', sid),
     // Moves a call from one status to another only if nobody else did first. Returns true if we did.
     async claimCallStatus(id, from, to) {
       return (await db.run('UPDATE calls SET status = ? WHERE id = ? AND status = ?', to, Number(id), from)).changes === 1;
+    },
+    // The one place a call's result gets recorded; false if it already was.
+    async claimCallCompletion(id) {
+      return (await db.run("UPDATE calls SET status = 'completed' WHERE id = ? AND status != 'completed'", Number(id))).changes === 1;
     },
     async updateCall(id, fields) {
       const s = setClause(fields, CALL_COLUMNS);
@@ -164,13 +180,14 @@ export function createStore(db) {
         (SELECT COUNT(*) FROM calls k WHERE k.campaign_id = c.id AND k.talked = 1) AS talked,
         (SELECT COUNT(*) FROM leads l WHERE l.campaign_id = c.id AND l.status = 'interested') AS interested,
         (SELECT COUNT(*) FROM leads l WHERE l.campaign_id = c.id AND l.status = 'won') AS won
-      FROM campaigns c ORDER BY c.id DESC LIMIT 50`),
+      FROM campaigns c WHERE c.status != 'archived' ORDER BY c.id DESC LIMIT 50`),
     releaseStaleClaims: (olderThanIso) => db.run('UPDATE queue_items SET claimed_at = NULL WHERE claimed_at < ?', olderThanIso),
 
     // ---- Dashboard sessions and login attempts ----
     createSession: (id, expiresIso) => db.run('INSERT INTO sessions (id, expires_at) VALUES (?, ?)', id, expiresIso),
     sessionValid: async (id) => Boolean(id && (await db.get('SELECT 1 AS ok FROM sessions WHERE id = ? AND expires_at > ?', id, new Date().toISOString()))),
     deleteSession: (id) => db.run('DELETE FROM sessions WHERE id = ?', id),
+    recentLoginFailuresAll: async (sinceIso) => (await db.get('SELECT COUNT(*) AS n FROM login_attempts WHERE at > ?', sinceIso)).n,
     recentLoginFailures: async (key, sinceIso) =>
       (await db.get('SELECT COUNT(*) AS n FROM login_attempts WHERE key = ? AND at > ?', key, sinceIso)).n,
     addLoginFailure: (key) => db.run('INSERT INTO login_attempts (key, at) VALUES (?, ?)', key, new Date().toISOString()),
@@ -221,7 +238,10 @@ export function createStore(db) {
       await db.run("UPDATE leads SET status = 'dnc' WHERE phone IN (SELECT value FROM json_each(?)) AND status != 'calling'", list);
     },
     isDnc: async (phone) => Boolean(await db.get('SELECT 1 AS x FROM dnc_numbers WHERE phone = ?', phone)),
-    removeDnc: (phone) => db.run('DELETE FROM dnc_numbers WHERE phone = ?', phone),
+    async removeDnc(phone) {
+      await db.run('DELETE FROM dnc_numbers WHERE phone = ?', phone);
+      await db.run("UPDATE leads SET status = 'new' WHERE phone = ? AND status = 'dnc'", phone);
+    },
     countDnc: async () => (await db.get('SELECT COUNT(*) AS n FROM dnc_numbers')).n,
     recentDnc: () => db.all('SELECT * FROM dnc_numbers ORDER BY added_at DESC LIMIT 50'),
     dncLeadIds: async (list) => (await db.all(`SELECT l.id FROM leads l JOIN dnc_numbers d ON d.phone = l.phone

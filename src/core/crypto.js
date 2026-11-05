@@ -25,6 +25,23 @@ export function safeEqual(a, b) {
   return diff === 0;
 }
 
+// Dashboard password changed in Settings: stored as "pbkdf2$<iterations>$<salt>$<hash>", never in plain text.
+async function pbkdf2(password, saltHex, iterations) {
+  const key = await crypto.subtle.importKey('raw', enc.encode(String(password)), 'PBKDF2', false, ['deriveBits']);
+  const salt = new Uint8Array(saltHex.match(/../g).map((h) => parseInt(h, 16)));
+  return toHex(new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, key, 256)));
+}
+export async function hashPassword(password) {
+  const salt = randomToken(16);
+  const iterations = 100000; // Cloudflare Workers' maximum
+  return `pbkdf2$${iterations}$${salt}$${await pbkdf2(password, salt, iterations)}`;
+}
+export async function verifyPassword(password, stored) {
+  const [kind, iterations, salt, hash] = String(stored || '').split('$');
+  if (kind !== 'pbkdf2' || !password) return false;
+  return safeEqual(await pbkdf2(password, salt, Number(iterations)), hash);
+}
+
 // For secrets of any length (passwords): compares digests, so the length isn't leaked either.
 export async function secretEqual(a, b) {
   if (!a || !b) return false;

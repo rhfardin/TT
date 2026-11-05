@@ -60,7 +60,7 @@ export class CallBridge {
   later(ms, fn) {
     const t = setTimeout(() => {
       this.timers.delete(t);
-      fn();
+      Promise.resolve().then(fn).catch((err) => this.logError(err));
     }, ms);
     this.timers.add(t);
     return t;
@@ -77,11 +77,13 @@ export class CallBridge {
           this.sendOpenAI({ type: 'input_audio_buffer.append', audio: msg.media?.payload });
           return;
         case 'mark': {
-          // Twilio confirms marks in order once the audio before them has played.
+          // Twilio confirms marks in order once the audio before them has played. After a "clear"
+          // (the caller talked over the AI) it also echoes the cleared marks; those are ignored.
           const i = this.marks.indexOf(msg.mark?.name);
-          if (i >= 0) this.marks.splice(0, i + 1);
-          if (msg.mark?.name === 'hangup') await this.hangup();
-          if (msg.mark?.name === 'transfer') await this.doTransfer();
+          if (i < 0) return;
+          this.marks.splice(0, i + 1);
+          if (msg.mark.name === 'hangup') await this.hangup();
+          if (msg.mark.name === 'transfer') await this.doTransfer();
           return;
         }
         case 'stop': return this.io.closeTwilio();
@@ -108,6 +110,11 @@ export class CallBridge {
       console.warn('media stream rejected');
       return this.io.closeTwilio();
     }
+    // Only from the status we just checked, so a stream can't take over a call that moved on meanwhile.
+    if (!(await this.ctx.store.claimCallStatus(callId, call.status, 'in_progress'))) {
+      console.warn('media stream rejected: call already taken');
+      return this.io.closeTwilio();
+    }
     this.callId = callId;
     this.callSid = call.call_sid || start.callSid;
     this.lead = lead;
@@ -119,7 +126,9 @@ export class CallBridge {
       this.usage = JSON.parse(call.usage || '{}');
       this.startedAt = Date.parse(`${call.created_at.replace(' ', 'T')}Z`) || this.startedAt; // time limit counts the whole call
     }
-    await this.ctx.store.updateCall(callId, { status: 'in_progress', call_sid: this.callSid });
+    if (!call.call_sid) await this.ctx.store.updateCall(callId, { call_sid: this.callSid });
+    // They hung up while we were getting ready: record the call now (finish() ran before we knew it).
+    if (this.closed) return this.finish();
     await this.connectOpenAI();
   }
 
@@ -139,7 +148,7 @@ export class CallBridge {
     if (this.closed) return this.openai.close();
     // Voicemail detection only exists on calls we place; someone calling us is a person.
     const guard = this.config.calling.amdEnabled && !this.resumed && !this.inbound;
-    const inbound = this.inbound ? (this.lead.business_name === UNKNOWN_CALLER ? 'unknown' : 'known') : null;
+    const inbound = this.inbound && !this.resumed ? (this.lead.business_name === UNKNOWN_CALLER ? 'unknown' : 'known') : null;
     this.transferOk = !this.resumed && transferAvailable(this.config, this.lead);
     const transfer = this.resumed ? 'missed' : this.transferOk ? 'available' : 'unavailable';
     const booking = calcomReady(this.config.calcom);
@@ -263,7 +272,8 @@ export class CallBridge {
   }
 
   playAudio(ev) {
-    if (!ev.delta) return;
+    // Audio still arriving for a reply the caller already talked over is dropped.
+    if (!ev.delta || this.truncated?.has(ev.item_id)) return;
     const ms = audioMs(ev.delta);
     const now = this.latestMediaTs;
     if (!this.item || this.item.id !== ev.item_id) {
@@ -283,6 +293,7 @@ export class CallBridge {
     const heardMs = Math.round(Math.min(Math.max(this.latestMediaTs - this.item.startTs, 0), this.item.sentMs));
     if (this.item.id) {
       this.sendOpenAI({ type: 'conversation.item.truncate', item_id: this.item.id, content_index: 0, audio_end_ms: heardMs });
+      (this.truncated ??= new Set()).add(this.item.id);
     }
     this.sendTwilio({ event: 'clear' });
     this.marks = []; // Twilio still confirms the cleared marks; they're ignored now
@@ -308,7 +319,12 @@ export class CallBridge {
         } else if (fc.name === 'book_meeting') {
           result = await bookMeeting(this.ctx, { ...pick(args, ['start', 'name', 'email']), lead_id: this.lead.id });
         } else if (fc.name === 'transfer_to_fardin') {
-          if (this.transferOk && !this.transferring) {
+          if (this.transferring) {
+            // Asked twice while already connecting: answer quietly, no new reply.
+            this.sendOpenAI({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: fc.call_id, output: '{"ok":true,"message":"Already connecting. Say nothing."}' } });
+            continue;
+          }
+          if (this.transferOk) {
             // Connect once "one sec, let me grab him" has finished playing. No reply to the model:
             // its session ends when the call moves to the owner's phone.
             this.transferring = { callId: fc.call_id, summary: String(args.summary || '').slice(0, 300) };
@@ -339,12 +355,16 @@ export class CallBridge {
     const t = this.transferring;
     if (!t || t.started || this.closed) return;
     t.started = true;
-    await this.ctx.store.updateCall(this.callId, { usage: JSON.stringify(this.usage) }); // for the cost once it ends
-    const r = await startTransfer(this.ctx, this.callId, { callSid: this.callSid, summary: t.summary, transcript: this.transcript });
-    if (r.ok) {
-      this.endReason = 'transfer';
-      return;
-    }
+    // Marked before Twilio is asked, because the stream closes the moment the call moves over:
+    // finish() then waits for this instead of recording the call as finished.
+    this.endReason = 'transfer';
+    t.promise = (async () => {
+      await this.ctx.store.updateCall(this.callId, { usage: JSON.stringify(this.usage) }); // for the cost once it ends
+      return startTransfer(this.ctx, this.callId, { callSid: this.callSid, summary: t.summary, transcript: this.transcript });
+    })().catch((err) => ({ ok: false, message: err.message }));
+    const r = await t.promise;
+    if (r.ok) return;
+    this.endReason = null;
     this.transferring = null;
     this.sendOpenAI({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: t.callId, output: JSON.stringify(r) } });
     this.sendOpenAI({ type: 'response.create' });
@@ -355,9 +375,15 @@ export class CallBridge {
   }
 
   async hangup() {
-    if (this.hangupRequested || !this.callSid || this.finished) return;
+    // Never hang up a call that's being handed to the owner.
+    if (this.hangupRequested || !this.callSid || this.finished || this.transferring?.started) return;
     this.hangupRequested = true;
-    try { await hangUp(this.config.twilio, this.callSid); } catch (err) { console.error('hangup failed', err.message); }
+    try {
+      await hangUp(this.config.twilio, this.callSid);
+    } catch (err) {
+      this.hangupRequested = false; // let the time limit try again
+      console.error('hangup failed', err.message);
+    }
   }
 
   // Call this when the Twilio socket closes. Saves the transcript and the analysed outcome.
@@ -367,7 +393,15 @@ export class CallBridge {
     this.timers.clear();
     if (this.openai?.isOpen()) this.openai.close();
     if (this.finished || !this.callId || !this.lead) return;
-    if (this.endReason === 'transfer') return; // the call continues on the owner's phone; saved by finalizeTransfer
+    if (this.transferring?.promise) {
+      // The call continues on the owner's phone and is saved by finalizeTransfer, unless the transfer failed.
+      const r = await this.transferring.promise;
+      if (r.ok) {
+        await this.ctx.store.updateCall(this.callId, { usage: JSON.stringify(this.usage) }).catch(() => {});
+        return;
+      }
+    }
+    if (this.finished) return;
     this.finished = true;
     try {
       const duration = this.elapsed();

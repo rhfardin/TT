@@ -61,3 +61,21 @@ test('test calls don\'t count against, and aren\'t blocked by, the daily limit',
   assert.equal((await placeCall(ctx, 2)).ok, true);
 });
 
+
+test('"don\'t call me" on a test call never blocks the owner\'s own number', async () => {
+  const { ctx, store } = await makeCtx(TWILIO);
+  await store.upsertLeads([lead()]);
+  await store.updateLead(1, { is_test: 1 });
+  await markDoNotCall(ctx, { lead_id: 1 });
+  assert.equal(await store.isDnc('+15125550100'), false);
+  assert.notEqual((await store.getLead(1)).status, 'dnc');
+});
+
+test('a call\'s result is recorded only once, even when two parts of the system race', async () => {
+  const { ctx, store, db } = await makeCtx(TWILIO);
+  await store.upsertLeads([lead()]);
+  const callId = await store.insertCall(1);
+  const { recordVoicemail } = await import('../src/core/actions.js');
+  await Promise.all([recordVoicemail(ctx, callId), recordVoicemail(ctx, callId)]);
+  assert.equal((await db.get("SELECT COUNT(*) AS n FROM events WHERE kind = 'call_completed'")).n, 1);
+});

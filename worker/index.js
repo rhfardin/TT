@@ -7,10 +7,10 @@ import { migrate } from '../src/core/schema.js';
 import { createStore } from '../src/core/store.js';
 import { handleRequest } from '../src/core/api.js';
 import { runDue } from '../src/core/queue.js';
-import { sendDueFollowups } from '../src/core/notify.js';
+import { housekeeping } from '../src/core/notify.js';
 import {
   handleTwilioStatus, handleTwilioAmd, handleTwilioRecording, handleTwilioWhisper, handleTwilioWhisperAnswer,
-  handleTwilioTransferResult, handleTwilioInbound, verifyElevenLabsSignature, handleElevenLabsWebhook,
+  handleTwilioTransferResult, handleTwilioInbound, handleTwilioInboundStatus, verifyElevenLabsSignature, handleElevenLabsWebhook,
 } from '../src/core/actions.js';
 import { validTwilioSignature } from '../src/core/twilio.js';
 import { resendSender } from '../src/core/email.js';
@@ -42,25 +42,28 @@ function d1(DB) {
   };
 }
 
-// publicUrl: PUBLIC_URL if set, otherwise the address the dashboard was opened on.
-async function makeCtx(env, publicUrl) {
+// publicUrl: PUBLIC_URL if set, otherwise the address the dashboard was opened on (always https).
+// waitUntil: keeps work going after the response was sent (Twilio webhooks must answer fast).
+async function makeCtx(env, publicUrl, waitUntil) {
   await ensureSchema(env);
   const store = createStore(d1(env.DB));
   // Settings saved in the dashboard override wrangler.jsonc vars and secrets.
   const config = buildConfig({ ...env, ...(await store.getSettings()), PUBLIC_URL: env.PUBLIC_URL || publicUrl });
-  const ctx = { config, env, store, sendEmail: resendSender(config.email), defaultPrompt: promptTemplate };
+  const ctx = { config, env, store, sendEmail: resendSender(config.email), defaultPrompt: promptTemplate, waitUntil };
   // The queue is in D1; the Dialer Durable Object only wakes up to work through it.
   ctx.queue = { poke: () => env.DIALER.get(env.DIALER.idFromName('main')).poke(config.publicUrl) };
   return ctx;
 }
 
+const httpsOrigin = (url) => `https://${url.host}`;
+
 const json = (body, status = 200, headers = {}) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } });
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, execution) {
     try {
-      return await handle(request, env);
+      return await handle(request, env, (p) => execution.waitUntil(p));
     } catch (err) {
       console.error(err);
       return json({ error: 'Something went wrong' }, 500);
@@ -68,16 +71,17 @@ export default {
   },
 
   // Cron: housekeeping, and a nudge to the queue in case an alarm was missed.
-  async scheduled(event, env) {
-    const ctx = await makeCtx(env, '');
-    await ctx.store.releaseStuckCalls(new Date(Date.now() - 30 * 60 * 1000).toISOString());
-    await ctx.store.purgeAuth();
-    await sendDueFollowups(ctx);
-    await env.DIALER.get(env.DIALER.idFromName('main')).poke();
+  async scheduled(event, env, execution) {
+    try {
+      const ctx = await makeCtx(env, '', (p) => execution.waitUntil(p));
+      await housekeeping(ctx);
+    } finally {
+      await env.DIALER.get(env.DIALER.idFromName('main')).poke();
+    }
   },
 };
 
-async function handle(request, env) {
+async function handle(request, env, waitUntil) {
   const url = new URL(request.url);
   const path = url.pathname;
 
@@ -88,7 +92,7 @@ async function handle(request, env) {
     return env.CALLS.get(env.CALLS.idFromName(callId)).fetch(request);
   }
 
-  const ctx = await makeCtx(env, url.origin);
+  const ctx = await makeCtx(env, httpsOrigin(url), waitUntil);
 
   if (request.method === 'POST' && path === '/webhooks/elevenlabs') {
     const raw = await request.text();
@@ -109,6 +113,7 @@ async function handle(request, env) {
     '/twilio/whisper-answer': handleTwilioWhisperAnswer,
     '/twilio/transfer-result': handleTwilioTransferResult,
     '/twilio/inbound': handleTwilioInbound,
+    '/twilio/status-inbound': handleTwilioInboundStatus,
   };
   if (request.method === 'POST' && twilioHandlers[path]) {
     const params = Object.fromEntries(new URLSearchParams(await request.text()));
@@ -121,6 +126,8 @@ async function handle(request, env) {
   }
 
   if (path.startsWith('/api/') || path.startsWith('/tools/')) {
+    // First run without a password: say so, instead of "wrong password" forever.
+    if (!env.ADMIN_PASSWORD) return json({ error: 'ADMIN_PASSWORD is not set. Run: npx wrangler secret put ADMIN_PASSWORD' }, 503);
     let body = {};
     if (request.method !== 'GET' && request.method !== 'HEAD') body = await request.json().catch(() => ({}));
     const r = await handleRequest(ctx, {
@@ -129,18 +136,21 @@ async function handle(request, env) {
       query: Object.fromEntries(url.searchParams),
       body,
       ip: request.headers.get('cf-connecting-ip') || '',
+      secure: url.protocol === 'https:',
       headers: {
         cookie: request.headers.get('cookie') || '',
         'x-tool-secret': request.headers.get('x-tool-secret') || '',
         'x-requested-with': request.headers.get('x-requested-with') || '',
+        range: request.headers.get('range') || '',
       },
     });
+    const noStore = { 'Cache-Control': 'no-store, private' };
     if (r.raw) {
-      const headers = { 'Content-Type': r.raw.contentType };
+      const headers = { 'Content-Type': r.raw.contentType, ...noStore, ...(r.raw.headers || {}) };
       if (r.raw.filename) headers['Content-Disposition'] = `attachment; filename="${r.raw.filename}"`;
       return new Response(r.raw.body, { status: r.status, headers });
     }
-    return json(r.json, r.status, r.headers);
+    return json(r.json, r.status, { ...noStore, ...(r.headers || {}) });
   }
 
   if (path === '/healthz') return new Response('ok');
@@ -150,7 +160,7 @@ async function handle(request, env) {
 // One instance per phone call: bridges Twilio audio to the OpenAI Realtime API.
 export class CallSession extends DurableObject {
   async fetch(request) {
-    const ctx = await makeCtx(this.env, new URL(request.url).origin);
+    const ctx = await makeCtx(this.env, httpsOrigin(new URL(request.url)), (p) => this.ctx.waitUntil(p));
     const { 0: client, 1: server } = new WebSocketPair();
     server.accept();
     let bridge;
@@ -200,7 +210,10 @@ export class Dialer extends DurableObject {
   async alarm() {
     let wait = 60 * 1000;
     try {
-      const ctx = await makeCtx(this.env, (await this.ctx.storage.get('publicUrl')) || '');
+      // Calls need the site's real address for Twilio's callbacks; it's learned from the dashboard.
+      const publicUrl = this.env.PUBLIC_URL || (await this.ctx.storage.get('publicUrl'));
+      if (!publicUrl) return; // the next poke from the dashboard brings it
+      const ctx = await makeCtx(this.env, publicUrl);
       wait = (await runDue(ctx)).waitMs;
     } catch (err) {
       console.error('queue error', err);

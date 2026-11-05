@@ -222,6 +222,7 @@ export const FINAL_STATUSES = ['dnc', 'won', 'not_interested'];
 
 export function checkLead(lead, calling, { ignoreWindow = false, now = new Date() } = {}) {
   if (!lead) return { ok: false, reason: 'lead not found' };
+  if (String(lead.phone).startsWith('hidden:')) return { ok: false, reason: 'they called from a hidden number' };
   if (FINAL_STATUSES.includes(lead.status)) return { ok: false, reason: `status is ${lead.status}` };
   if (lead.status === 'calling') return { ok: false, reason: 'a call is already in progress' };
   if (lead.attempts >= calling.maxAttempts) return { ok: false, reason: `already tried ${lead.attempts} times` };

@@ -32,7 +32,11 @@ export async function setInboundUrl(tw, voiceUrl) {
   const list = await get(tw, `/IncomingPhoneNumbers.json?PhoneNumber=${encodeURIComponent(tw.fromNumber)}`);
   const number = list.incoming_phone_numbers?.[0];
   if (!number) throw new Error(`${tw.fromNumber} isn't a number in this Twilio account`);
-  await post(tw, `/IncomingPhoneNumbers/${encodeURIComponent(number.sid)}.json`, { VoiceUrl: voiceUrl, VoiceMethod: 'POST' });
+  // The status callback tells us when an incoming call ends (e.g. they hung up before the AI answered).
+  await post(tw, `/IncomingPhoneNumbers/${encodeURIComponent(number.sid)}.json`, {
+    VoiceUrl: voiceUrl, VoiceMethod: 'POST',
+    StatusCallback: voiceUrl.replace(/\/twilio\/inbound$/, '/twilio/status-inbound'), StatusCallbackMethod: 'POST',
+  });
 }
 
 // Token the media stream must present, so random clients can't open AI sessions on our bill.
@@ -94,18 +98,22 @@ export async function createStreamingCall(config, { to, callId }) {
 }
 
 // The MP3 of a finished recording (Twilio requires the account's credentials to download it).
-export async function fetchRecording(tw, recordingSid) {
+// range: the browser's Range header, passed on so audio players can seek (iPhones require it).
+export async function fetchRecording(tw, recordingSid, range) {
   const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(tw.accountSid)}/Recordings/${encodeURIComponent(recordingSid)}.mp3`, {
-    headers: { Authorization: 'Basic ' + btoa(`${tw.accountSid}:${tw.authToken}`) },
+    headers: { Authorization: 'Basic ' + btoa(`${tw.accountSid}:${tw.authToken}`), ...(range ? { Range: range } : {}) },
   });
   if (!res.ok) throw new Error(`Twilio HTTP ${res.status}`);
-  return res.arrayBuffer();
+  const headers = { 'Accept-Ranges': 'bytes' };
+  for (const h of ['Content-Range', 'Content-Length']) if (res.headers.get(h)) headers[h] = res.headers.get(h);
+  return { status: res.status, body: await res.arrayBuffer(), headers };
 }
 
 export const hangUp = (tw, callSid) => post(tw, `/Calls/${encodeURIComponent(callSid)}.json`, { Status: 'completed' });
 
 // Replaces what a live call is doing with new TwiML (used to hand the call over to a person).
-export const updateCall = (tw, callSid, twiml) => post(tw, `/Calls/${encodeURIComponent(callSid)}.json`, { Twiml: twiml });
+export const updateCall = (tw, callSid, twiml, extra = {}) =>
+  post(tw, `/Calls/${encodeURIComponent(callSid)}.json`, { Twiml: twiml, ...extra });
 
 export const sendSms = (tw, to, text) => post(tw, '/Messages.json', { To: to, From: tw.fromNumber, Body: text.slice(0, 1500) });
 

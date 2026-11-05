@@ -15,8 +15,15 @@ export function providerProblem(config) {
       ? null : 'ElevenLabs is not configured (ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID, ELEVENLABS_PHONE_NUMBER_ID).';
   }
   const tw = config.twilio;
-  return config.openai.apiKey && tw.accountSid && tw.authToken && tw.fromNumber
-    ? null : 'OpenAI calling is not configured (OPENAI_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER).';
+  if (!(config.openai.apiKey && tw.accountSid && tw.authToken && tw.fromNumber)) {
+    return 'OpenAI calling is not configured (OPENAI_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER).';
+  }
+  // Twilio has to reach this server over the internet, or the business answers to silence.
+  const local = /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\])/i.test(config.publicUrl);
+  if ((!config.publicUrl.startsWith('https://') || local) && !config.allowLocalUrl) {
+    return `Your site address must be a public https:// address so Twilio can reach it (it's ${config.publicUrl}). Set PUBLIC_URL.`;
+  }
+  return null;
 }
 
 async function startElevenLabsCall(config, lead) {
@@ -43,7 +50,8 @@ async function startElevenLabsCall(config, lead) {
 export async function placeCall(ctx, leadId, opts = {}) {
   const { config, store } = ctx;
   const lead = await store.getLead(leadId);
-  const check = checkLead(lead, config.calling, opts);
+  // resetTries: a manual "Call now" may go past the max-tries limit (the count restarts only if it goes out).
+  const check = checkLead(lead && opts.resetTries ? { ...lead, attempts: 0 } : lead, config.calling, opts);
   if (!check.ok) return { ok: false, error: check.reason };
   const problem = providerProblem(config);
   if (problem) return { ok: false, error: problem };
@@ -51,11 +59,12 @@ export async function placeCall(ctx, leadId, opts = {}) {
     await store.updateLead(lead.id, { status: 'dnc' });
     return { ok: false, error: 'this number is on your do-not-call list' };
   }
+  if (await store.hasLiveInboundCall(lead.id)) return { ok: false, error: 'they are on a call with us right now' };
   if (!lead.is_test && (await store.callsLast24h()).count >= config.calling.maxCallsPerDay) {
     return { ok: false, error: `daily limit reached (${config.calling.maxCallsPerDay} calls in 24 hours), to protect your number from spam labels`, limited: true };
   }
   // Atomic, so a manual call and the queue can never ring the same business twice.
-  if (!(await store.claimLeadForCall(lead.id, config.calling.maxAttempts))) {
+  if (!(await store.claimLeadForCall(lead.id, config.calling.maxAttempts, { resetTries: opts.resetTries }))) {
     return { ok: false, error: 'this business is already being called' };
   }
   const callId = await store.insertCall(lead.id);
@@ -89,17 +98,14 @@ export async function recordCallResult(ctx, callId, { summary, transcript, outco
   const { store, config } = ctx;
   const call = await store.getCall(callId);
   if (!call) return;
+  // Exactly once per call, even when the bridge, voicemail detection and Twilio's callbacks race.
+  if (!(await store.claimCallCompletion(callId))) return;
   const lead = await store.getLead(call.lead_id);
   outcome = String(outcome ?? '').toLowerCase().trim();
   const inbound = call.direction === 'inbound';
   const talked = (transcript ?? []).some((t) => t.role === 'user');
   usage ??= call.usage ? JSON.parse(call.usage) : {};
-  const costCents = config.voiceProvider === 'elevenlabs'
-    ? Math.round(Math.ceil((Number(duration) || 0) / 60) * 10.4 * 100) / 100 // ~$0.09 ElevenLabs + Twilio per minute
-    : estimateCostCents({
-      model: config.openai.realtimeModel, usage, seconds: duration, answered: Number(duration) > 0, inbound,
-      amd: config.calling.amdEnabled, recorded: config.recordCalls, extraSeconds,
-    });
+  const costCents = callCostCents(config, { usage, duration, inbound, extraSeconds });
 
   await store.updateCall(callId, {
     status: 'completed', duration_secs: duration ?? null, summary: summary ?? null, ended_at: nowSql(),
@@ -109,9 +115,12 @@ export async function recordCallResult(ctx, callId, { summary, transcript, outco
 
   const fields = { last_summary: summary ?? null };
   // A "do not call" set by a tool during the call wins over anything else. A caller who hung up
-  // straight away doesn't change anything.
+  // straight away doesn't change anything, and a call from a customer who already said yes (or no)
+  // only ever moves them up: a "won" business stays won.
   if (lead.status !== 'dnc' && (talked || !inbound)) {
-    fields.status = OUTCOME_STATUS[outcome] ?? (talked ? 'completed' : 'no_answer');
+    const next = OUTCOME_STATUS[outcome] ?? (talked ? 'completed' : 'no_answer');
+    const keep = inbound && (lead.status === 'won' || (lead.status === 'not_interested' && !['interested', 'won', 'callback'].includes(next)));
+    if (!keep) fields.status = next;
   }
   if (collected.business_name && lead.business_name === UNKNOWN_CALLER) fields.business_name = String(collected.business_name).slice(0, 200);
   if (collected.meeting_time) fields.meeting_time = String(collected.meeting_time);
@@ -121,12 +130,22 @@ export async function recordCallResult(ctx, callId, { summary, transcript, outco
   await store.logEvent(lead.id, 'call_completed', { outcome, duration, direction: call.direction });
   const reason = hotReason({ status: fields.status, outcome, inbound, talked });
   if (reason && !lead.is_test) await notifyOwner(ctx, { ...lead, ...fields }, { reason, summary, collected });
-  if (inbound) {
-    // They called us back: a retry call already waiting for them would be one call too many.
-    if (talked) await store.dequeueLead(lead.id);
-  } else if (fields.status === 'no_answer' || fields.status === 'voicemail') {
-    await scheduleRetry(ctx, lead.id, fields.status);
+  const unreached = fields.status === 'no_answer' || fields.status === 'voicemail';
+  // Reached (on any call, theirs or ours): a retry call already waiting for them would be one too many.
+  if (talked || (!inbound && !unreached)) await store.dequeueLead(lead.id);
+  else if (!inbound && unreached) await scheduleRetry(ctx, lead.id, fields.status);
+}
+
+// Estimated cost of a call in cents (see costs.js).
+function callCostCents(config, { usage, duration, inbound, extraSeconds = 0 }) {
+  const seconds = Number(duration) || 0;
+  if (config.voiceProvider === 'elevenlabs') {
+    return Math.round(Math.ceil(seconds / 60) * 10.4 * 100) / 100; // ElevenLabs ~$0.09 + Twilio ~$0.014 per minute
   }
+  return estimateCostCents({
+    model: config.openai.realtimeModel, usage, seconds, answered: seconds > 0 || extraSeconds > 0, inbound,
+    amd: config.calling.amdEnabled, recorded: config.recordCalls, extraSeconds,
+  });
 }
 
 export const isMachine = (answeredBy) => /^(machine|fax)/.test(String(answeredBy || ''));
@@ -142,9 +161,11 @@ export async function scheduleRetry(ctx, leadId, reason) {
   const lead = await store.getLead(leadId);
   if (!lead?.in_campaign || lead.is_test || FINAL_STATUSES.includes(lead.status)) return;
   if (lead.attempts >= config.calling.maxAttempts) return;
+  // A campaign that was stopped (or paused and then stopped) doesn't get new calls.
+  if (lead.campaign_id && (await store.getCampaign(lead.campaign_id))?.status === 'stopped') return;
   const hours = reason === 'voicemail' ? config.calling.retryVoicemailHours : config.calling.retryNoAnswerHours;
   const shift = lead.attempts % 2 ? 3 : -2;
-  const at = nextWindowStart(lead, config.calling, new Date(Date.now() + (hours + shift) * 3600 * 1000));
+  const at = nextWindowStart(lead, config.calling, new Date(Date.now() + Math.max(hours / 2, hours + shift) * 3600 * 1000));
   await store.scheduleLead(lead.id, at.toISOString(), `retry after ${reason}`, lead.campaign_id ?? null);
   await store.logEvent(lead.id, 'retry_scheduled', at.toISOString());
   await ctx.queue?.poke?.();
@@ -168,20 +189,48 @@ export async function handleTwilioStatus(ctx, callId, params) {
   if (['no-answer', 'busy', 'failed', 'canceled'].includes(status)) {
     await recordNotConnected(ctx, callId, status, status === 'failed' ? 'failed' : 'no_answer');
   } else if (status === 'completed') {
-    // Answered, but our audio stream never connected (wrong PUBLIC_URL, proxy without websockets...).
     const call = await ctx.store.getCall(callId);
-    if (call && ['initiated', 'ringing'].includes(call.status) && !isMachine(call.answered_by)) {
-      await recordNotConnected(ctx, callId, 'the call was answered but the AI audio never connected; check PUBLIC_URL', 'failed');
-    } else if (call?.status === 'transferring') {
+    if (!call) return;
+    if (['initiated', 'ringing'].includes(call.status) && !isMachine(call.answered_by)) {
+      if (call.direction === 'inbound') {
+        await recordNotConnected(ctx, callId, 'they hung up before the AI answered');
+      } else {
+        // Answered, but our audio stream never connected (wrong PUBLIC_URL, proxy without websockets...).
+        await recordNotConnected(ctx, callId, 'the call was answered but the AI audio never connected; check PUBLIC_URL', 'failed');
+      }
+    } else if (call.status === 'transferring') {
       // The call ended during or after a transfer without the Dial result arriving first.
       await finalizeTransfer(ctx, callId, { duration: Number(params.CallDuration) || null });
+    } else if (call.status === 'completed' && !call.duration_secs && Number(params.CallDuration) > 0) {
+      // Recorded before the call ended (voicemail detection): add the length and its cost now.
+      const seconds = Number(params.CallDuration);
+      const usage = JSON.parse(call.usage || '{}');
+      await ctx.store.updateCall(callId, {
+        duration_secs: seconds,
+        cost_cents: callCostCents(ctx.config, { usage, duration: seconds, inbound: call.direction === 'inbound' }),
+      });
     }
   }
+}
+
+// Status callback for calls to our number (set by "Set it up for me"): find the call by its Twilio id.
+export async function handleTwilioInboundStatus(ctx, _callId, params) {
+  const call = params.CallSid ? await ctx.store.getCallBySid(params.CallSid) : null;
+  if (call) await handleTwilioStatus(ctx, call.id, params);
+}
+
+// Runs work after Twilio has been answered (it gives up on webhooks that take over 15 seconds).
+export function inBackground(ctx, promise) {
+  const p = promise.catch((err) => console.error('background work failed', err));
+  if (ctx.waitUntil) ctx.waitUntil(p);
+  return p;
 }
 
 // ---- Incoming calls (OpenAI provider) ----
 
 export const UNKNOWN_CALLER = 'Unknown caller';
+// What Twilio puts in "From" for anonymous, restricted, blocked and unavailable caller IDs.
+const HIDDEN_CALLER_IDS = ['+266696687', '+7378742833', '+2562533', '+8656696', '+86282452253'];
 
 // Twilio asks what to do with a call to our number: find who's calling and connect the AI.
 export async function handleTwilioInbound(ctx, _callId, params) {
@@ -189,8 +238,10 @@ export async function handleTwilioInbound(ctx, _callId, params) {
   if (!params.CallSid || providerProblem(config)) {
     return `<Response><Say>Sorry, nobody can take your call right now. Please try again later.</Say><Hangup/></Response>`;
   }
-  // Hidden numbers still get answered; they just can't be matched to a business.
-  const phone = normalizePhone(params.From, config.calling.defaultCountryCode) || `hidden:${params.CallSid}`;
+  // Hidden numbers still get answered; they just can't be matched to a business. Twilio sends
+  // withheld caller IDs as fixed pseudo-numbers, which must never merge different callers into one lead.
+  const from = normalizePhone(params.From, config.calling.defaultCountryCode);
+  const phone = from && !HIDDEN_CALLER_IDS.includes(from) ? from : `hidden:${params.CallSid}`;
   let lead = await store.getLeadByPhone(phone);
   if (!lead) {
     await store.upsertLeads([{
@@ -219,14 +270,15 @@ export async function startTransfer(ctx, callId, { callSid, summary, transcript 
     transcript: JSON.stringify(transcript ?? []),
   });
   try {
-    await updateCall(config.twilio, callSid, transferTwiml(config, callId));
-    const call = await store.getCall(callId);
-    await store.logEvent(call.lead_id, 'transfer_started', summary);
-    return { ok: true };
+    // The call's time limit was set for the AI part; the owner's conversation gets up to 4 hours.
+    await updateCall(config.twilio, callSid, transferTwiml(config, callId), { TimeLimit: '14400' });
   } catch (err) {
     await store.updateCall(callId, { status: 'in_progress', transfer_state: 'failed' });
     return { ok: false, message: `The transfer didn't go through. Apologize and offer that ${config.seller.yourName || 'the owner'} calls them back today.` };
   }
+  const call = await store.getCall(callId);
+  await store.logEvent(call.lead_id, 'transfer_started', summary).catch(() => {});
+  return { ok: true };
 }
 
 // TwiML played to the owner before he's connected.
@@ -248,7 +300,8 @@ export async function handleTwilioTransferResult(ctx, callId, params) {
   const call = await ctx.store.getCall(callId);
   if (!call || call.status !== 'transferring') return '<Response><Hangup/></Response>';
   if (call.transfer_state === 'connected') {
-    await finalizeTransfer(ctx, callId, { talkSecs: Number(params.DialCallDuration) || 0 });
+    // Answer Twilio right away; the analysis and alert email can take longer than Twilio waits.
+    inBackground(ctx, finalizeTransfer(ctx, callId, { talkSecs: Number(params.DialCallDuration) || 0 }));
     return '<Response><Hangup/></Response>';
   }
   await ctx.store.updateCall(callId, { transfer_state: 'missed' });
@@ -271,6 +324,7 @@ export async function finalizeTransfer(ctx, callId, { talkSecs = null, duration 
   }
   const name = config.seller.yourName || 'you';
   const connected = call.transfer_state === 'connected';
+  duration ??= Math.max(0, Math.round((Date.now() - Date.parse(`${call.created_at.replace(' ', 'T')}Z`)) / 1000)) || null;
   const lead_in = connected
     ? `Connected to ${name}${talkSecs ? ` for ${Math.max(1, Math.round(talkSecs / 60))} min` : ''}.`
     : `They hung up while being connected to ${name}.`;
@@ -343,7 +397,7 @@ export async function sendDemoLink(ctx, { lead_id, email, contact_name, channel 
   const tw = config.twilio;
   if (channel === 'sms' || channel === 'both') {
     const toPhone = lead.phone;
-    if (tw.accountSid && tw.authToken && tw.fromNumber && toPhone) {
+    if (tw.accountSid && tw.authToken && tw.fromNumber && /^\+\d+$/.test(toPhone)) { // not for hidden numbers
       try {
         await sendSms(tw, toPhone, text);
         sent.push(`text to ${toPhone}`);
@@ -437,6 +491,8 @@ export async function bookMeeting(ctx, { lead_id, start, name, email }) {
 export async function markDoNotCall(ctx, { lead_id, reason }) {
   const lead = await ctx.store.getLead(lead_id);
   if (!lead) return { ok: false, message: 'Unknown business.' };
+  // A test call is the owner trying things out: never block his own number.
+  if (lead.is_test) return { ok: true, message: 'This is a test call, so nothing was changed. Apologize briefly and end the call politely.' };
   await ctx.store.updateLead(lead.id, { status: 'dnc' });
   if (!String(lead.phone).startsWith('hidden:')) await ctx.store.addDnc([lead.phone], 'asked on a call');
   await ctx.store.logEvent(lead.id, 'do_not_call', reason || 'requested on call');

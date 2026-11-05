@@ -4,9 +4,16 @@ export function buildConfig(e) {
     const v = e[name];
     return v === undefined || v === null || v === '' ? fallback : String(v);
   };
+  // Whole numbers kept inside a sane range; anything unreadable falls back to the default.
+  const num = (name, fallback, min, max) => {
+    const n = Math.round(Number(env(name, String(fallback))));
+    return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : fallback;
+  };
   return {
     port: Number(env('PORT', '3000')),
     publicUrl: env('PUBLIC_URL', 'http://localhost:3000').replace(/\/$/, ''),
+    // Lets calls go out with a non-https or localhost address (only for tests and local experiments).
+    allowLocalUrl: env('ALLOW_LOCAL_URL', 'false') === 'true',
     adminPassword: env('ADMIN_PASSWORD'),
     dataDir: env('DATA_DIR', './data'),
 
@@ -43,7 +50,7 @@ export function buildConfig(e) {
     // Alerts to the owner about hot leads, and the optional follow-up email to businesses.
     alerts: {
       email: env('ALERT_EMAIL'),
-      followupDays: Number(env('FOLLOWUP_DAYS', '0')), // 0 = off
+      followupDays: num('FOLLOWUP_DAYS', 0, 0, 30), // 0 = off
       businessAddress: env('BUSINESS_ADDRESS'), // US law (CAN-SPAM) needs a postal address in follow-up emails
     },
 
@@ -81,20 +88,23 @@ export function buildConfig(e) {
     calling: {
       defaultCountryCode: env('DEFAULT_COUNTRY_CODE', '1'),
       defaultTimezone: env('DEFAULT_TIMEZONE', 'America/New_York'),
-      windowStartHour: Number(env('CALL_WINDOW_START', '9')),
-      windowEndHour: Number(env('CALL_WINDOW_END', '17')),
+      windowStartHour: num('CALL_WINDOW_START', 9, 0, 23),
+      windowEndHour: num('CALL_WINDOW_END', 17, 1, 24),
       // 1 = Monday ... 7 = Sunday
-      days: env('CALL_DAYS', '1,2,3,4,5').split(',').map(Number),
-      spacingSeconds: Number(env('CALL_SPACING_SECONDS', '90')),
-      maxAttempts: Number(env('MAX_ATTEMPTS', '3')),
-      maxCallSeconds: Number(env('MAX_CALL_SECONDS', '420')),
+      days: (() => {
+        const d = env('CALL_DAYS', '1,2,3,4,5').split(',').map(Number).filter((x) => x >= 1 && x <= 7);
+        return d.length ? d : [1, 2, 3, 4, 5];
+      })(),
+      spacingSeconds: num('CALL_SPACING_SECONDS', 90, 0, 3600),
+      maxAttempts: num('MAX_ATTEMPTS', 3, 1, 10),
+      maxCallSeconds: num('MAX_CALL_SECONDS', 420, 60, 1800),
       // Calls per 24 hours from one number. A steady, modest pace keeps it from being marked "Spam Likely".
-      maxCallsPerDay: Number(env('MAX_CALLS_PER_DAY', '80')),
+      maxCallsPerDay: num('MAX_CALLS_PER_DAY', 80, 1, 1000),
       // Twilio answering machine detection: hang up on voicemail within a few seconds.
       amdEnabled: env('AMD_ENABLED', 'true') === 'true',
       // Automatic retries for businesses in the call list (never for test calls or manual one-offs).
-      retryNoAnswerHours: Number(env('RETRY_NO_ANSWER_HOURS', '24')),
-      retryVoicemailHours: Number(env('RETRY_VOICEMAIL_HOURS', '48')),
+      retryNoAnswerHours: num('RETRY_NO_ANSWER_HOURS', 24, 1, 336),
+      retryVoicemailHours: num('RETRY_VOICEMAIL_HOURS', 48, 1, 336),
     },
 
     email: {

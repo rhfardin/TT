@@ -67,7 +67,9 @@ export async function startApp(env = {}) {
       const m = url.match(/\/Calls\/(\w+)\.json$/);
       if (m && body.Twiml) {
         if (fake.failUpdates) return new Response(JSON.stringify({ message: 'Call is not in-progress' }), { status: 400 });
-        fake.updates.push({ sid: m[1], twiml: body.Twiml });
+        fake.updates.push({ sid: m[1], twiml: body.Twiml, body });
+        // Like real Twilio, the call's current <Connect><Stream> ends as soon as its TwiML is replaced.
+        fake.onUpdate?.(m[1]);
         return new Response('{}');
       }
       if (m) {
@@ -111,7 +113,7 @@ export async function startApp(env = {}) {
     DATA_DIR: dataDir, ADMIN_PASSWORD: 'pw', PORT: '0', OPENAI_API_KEY: 'sk-test',
     TWILIO_ACCOUNT_SID: 'AC1', TWILIO_AUTH_TOKEN: 'tok', TWILIO_FROM_NUMBER: '+15550000000',
     OPENAI_REALTIME_URL: `ws://127.0.0.1:${openai.address().port}`,
-    CALL_WINDOW_START: '0', CALL_WINDOW_END: '24', CALL_DAYS: '1,2,3,4,5,6,7', CALL_SPACING_SECONDS: '1',
+    CALL_WINDOW_START: '0', CALL_WINDOW_END: '24', CALL_DAYS: '1,2,3,4,5,6,7', CALL_SPACING_SECONDS: '1', ALLOW_LOCAL_URL: 'true',
     ...env,
   });
   const { server } = await import('../src/server.js');

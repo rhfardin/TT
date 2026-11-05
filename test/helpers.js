@@ -12,7 +12,7 @@ export async function memoryStore() {
 
 export async function makeCtx(env = {}) {
   const { db, store } = await memoryStore();
-  const config = buildConfig({ ADMIN_PASSWORD: 'pw', CALL_WINDOW_START: '0', CALL_WINDOW_END: '24', CALL_DAYS: '1,2,3,4,5,6,7', ...env });
+  const config = buildConfig({ ADMIN_PASSWORD: 'pw', CALL_WINDOW_START: '0', CALL_WINDOW_END: '24', CALL_DAYS: '1,2,3,4,5,6,7', ALLOW_LOCAL_URL: 'true', ...env });
   const sent = [];
   const ctx = { config, env, store, sendEmail: async (to, subject, text) => sent.push({ to, subject, text }) };
   return { ctx, db, store, sent };

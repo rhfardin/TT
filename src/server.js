@@ -10,10 +10,10 @@ import { migrate } from './core/schema.js';
 import { createStore } from './core/store.js';
 import { handleRequest } from './core/api.js';
 import { runDue } from './core/queue.js';
-import { sendDueFollowups } from './core/notify.js';
+import { housekeeping } from './core/notify.js';
 import {
   handleTwilioStatus, handleTwilioAmd, handleTwilioRecording, handleTwilioWhisper, handleTwilioWhisperAnswer,
-  handleTwilioTransferResult, handleTwilioInbound, verifyElevenLabsSignature, handleElevenLabsWebhook,
+  handleTwilioTransferResult, handleTwilioInbound, handleTwilioInboundStatus, verifyElevenLabsSignature, handleElevenLabsWebhook,
 } from './core/actions.js';
 import { validTwilioSignature } from './core/twilio.js';
 import { resendSender, textToHtml } from './core/email.js';
@@ -59,7 +59,9 @@ async function makeCtx() {
 // ---- Call queue: the queue is in the database; this timer works through it one call at a time ----
 let queueTimer = null;
 let queueRunning = false;
-const queue = { poke: () => scheduleQueue(0) };
+let pokedWhileRunning = false;
+// runDue itself enforces the gap between calls, so waking it early is always safe.
+const queue = { poke: () => (queueRunning ? (pokedWhileRunning = true) : scheduleQueue(0)) };
 function scheduleQueue(ms) {
   clearTimeout(queueTimer);
   queueTimer = setTimeout(runQueue, ms);
@@ -68,6 +70,7 @@ function scheduleQueue(ms) {
 async function runQueue() {
   if (queueRunning) return;
   queueRunning = true;
+  pokedWhileRunning = false;
   let wait = 60 * 1000;
   try {
     wait = (await runDue(await makeCtx())).waitMs ?? wait;
@@ -75,16 +78,16 @@ async function runQueue() {
     console.error('queue error', err);
   } finally {
     queueRunning = false;
-    scheduleQueue(Math.min(wait, 60 * 1000)); // check at least every minute, for scheduled retries
+    scheduleQueue(pokedWhileRunning ? 0 : Math.min(wait, 60 * 1000)); // check at least every minute, for scheduled retries
   }
 }
 scheduleQueue(2000);
 
-// Housekeeping: calls whose result never arrived, expired sessions.
+// Housekeeping: calls whose result never arrived, expired sessions, follow-up emails.
 setInterval(() => {
-  store.releaseStuckCalls(new Date(Date.now() - 30 * 60 * 1000).toISOString()).catch((err) => console.error(err));
-  store.purgeAuth().catch((err) => console.error(err));
-  makeCtx().then(sendDueFollowups).catch((err) => console.error(err));
+  makeCtx().then(async (ctx) => {
+    await housekeeping(ctx);
+  }).catch((err) => console.error(err));
 }, 5 * 60 * 1000).unref();
 
 // ---- HTTP ----
@@ -121,22 +124,36 @@ app.post('/twilio/whisper', ...twilioRoute(handleTwilioWhisper));
 app.post('/twilio/whisper-answer', ...twilioRoute(handleTwilioWhisperAnswer));
 app.post('/twilio/transfer-result', ...twilioRoute(handleTwilioTransferResult));
 app.post('/twilio/inbound', ...twilioRoute(handleTwilioInbound));
+app.post('/twilio/status-inbound', ...twilioRoute(handleTwilioInboundStatus));
 
+// Nothing from the API may be stored by a proxy or CDN (e.g. Cloudflare in front of this server).
+app.use(['/api', '/tools'], (req, res, next) => { res.set('Cache-Control', 'no-store, private'); next(); });
 app.use(['/api', '/tools'], express.json({ limit: '20mb' }), route(async (req, res) => {
   const r = await handleRequest(await makeCtx(), {
     method: req.method,
     path: req.originalUrl.split('?')[0],
     query: req.query,
     body: req.body,
-    ip: req.ip,
-    headers: { cookie: req.get('cookie'), 'x-tool-secret': req.get('x-tool-secret'), 'x-requested-with': req.get('x-requested-with') },
+    ip: req.get('cf-connecting-ip') || req.ip,
+    secure: req.secure,
+    headers: {
+      cookie: req.get('cookie'), 'x-tool-secret': req.get('x-tool-secret'), 'x-requested-with': req.get('x-requested-with'),
+      range: req.get('range'),
+    },
   });
   if (r.raw) {
     if (r.raw.filename) res.attachment(r.raw.filename);
+    res.set(r.raw.headers || {});
     return res.status(r.status).type(r.raw.contentType).send(typeof r.raw.body === 'string' ? r.raw.body : Buffer.from(r.raw.body));
   }
   res.set(r.headers || {}).status(r.status).json(r.json);
 }));
+// Broken JSON in a request gets a short JSON answer, not an HTML page with a stack trace.
+app.use((err, req, res, next) => {
+  if (err?.type === 'entity.parse.failed' || err?.status === 400) return res.status(400).json({ error: 'bad request' });
+  if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'too large' });
+  next(err);
+});
 
 app.get('/healthz', (req, res) => res.send('ok'));
 app.use(express.static(path.join(root, 'public')));

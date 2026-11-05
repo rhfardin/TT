@@ -41,6 +41,15 @@ export async function notifyOwner(ctx, lead, { reason, summary, collected = {} }
   }
 }
 
+// Regular upkeep, every few minutes (Node timer / Cloudflare cron): stuck calls, old sessions, follow-ups.
+export async function housekeeping(ctx) {
+  const { store, config } = ctx;
+  const callWindow = (config.calling.maxCallSeconds + 10 * 60) * 1000;
+  await store.releaseStuckCalls(new Date(Date.now() - callWindow).toISOString(), new Date(Date.now() - (4 * 3600 + 600) * 1000).toISOString());
+  await store.purgeAuth();
+  await sendDueFollowups(ctx);
+}
+
 // After a preview email, schedule the single follow-up (if turned on).
 export async function scheduleFollowup(ctx, lead) {
   const days = ctx.config.alerts.followupDays;

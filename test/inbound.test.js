@@ -98,5 +98,35 @@ test('unsigned requests to the incoming-call address are refused', async () => {
 test('"Set it up for me" points the Twilio number at the AI', async () => {
   const r = await app.api('POST', '/api/setup/inbound', {});
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(app.fake.numberUpdates.at(-1), { VoiceUrl: 'https://calls.example.com/twilio/inbound', VoiceMethod: 'POST' });
+  assert.deepEqual(app.fake.numberUpdates.at(-1), {
+    VoiceUrl: 'https://calls.example.com/twilio/inbound', VoiceMethod: 'POST',
+    StatusCallback: 'https://calls.example.com/twilio/status-inbound', StatusCallbackMethod: 'POST',
+  });
+});
+
+test('withheld numbers (Twilio\'s +266696687 "anonymous") are never merged into one lead', async () => {
+  await callIn('+266696687');
+  await callIn('+266696687');
+  const hidden = (await app.api('GET', '/api/leads?limit=200')).body.leads.filter((l) => l.phone.startsWith('hidden:'));
+  assert.ok(hidden.length >= 3, `each hidden caller is separate (got ${hidden.length})`);
+  // ...and a hidden caller can never be dialled.
+  const r = await app.api('POST', `/api/leads/${hidden[0].id}/call`, {});
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /hidden number/);
+});
+
+test('a customer who already said yes stays "won" when they call in', async () => {
+  await app.api('POST', '/api/import', { rows: [['Business', 'Phone'], ['Happy Customer', '512-555-0650']] });
+  const lead = (await app.api('GET', '/api/leads?q=0650')).body.leads[0];
+  await app.api('PATCH', `/api/leads/${lead.id}`, { status: 'won' });
+  const { twiml, CallSid } = await callIn('(512) 555-0650');
+  app.fake.onSession = (ws) => ws.send(JSON.stringify({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Quick question about the site.' }));
+  app.fake.analysis = { outcome: 'callback', summary: 'Had a question.' };
+  const s = app.mediaStream({ Twiml: twiml }, { callSid: CallSid });
+  await s.ready;
+  await waitFor(async () => (await app.api('GET', `/api/leads/${lead.id}`)).body.calls[0]?.status === 'in_progress');
+  await new Promise((r) => setTimeout(r, 50));
+  s.stop();
+  await waitFor(async () => (await app.api('GET', `/api/leads/${lead.id}`)).body.calls[0].status === 'completed');
+  assert.equal((await app.api('GET', `/api/leads/${lead.id}`)).body.lead.status, 'won');
 });
