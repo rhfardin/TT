@@ -111,6 +111,7 @@ export class CallBridge {
     this.lead = lead;
     this.resumed = resume;
     this.inbound = call.direction === 'inbound';
+    this.variant = call.variant || 'A';
     if (resume) {
       this.transcript = JSON.parse(call.transcript || '[]');
       this.startedAt = Date.parse(`${call.created_at.replace(' ', 'T')}Z`) || this.startedAt; // time limit counts the whole call
@@ -145,7 +146,7 @@ export class CallBridge {
         type: 'realtime',
         model: realtimeModel,
         output_modalities: ['audio'],
-        instructions: renderPrompt(this.promptTemplate, this.lead, this.config.seller,
+        instructions: renderPrompt(this.template(), this.lead, this.config.seller,
           { recording: this.config.recordCalls, transfer, history: this.transcript, inbound, booking }),
         audio: {
           input: {
@@ -185,6 +186,13 @@ export class CallBridge {
       instructions: 'The call is almost out of time. Briefly wrap up: confirm the next step, say a warm goodbye, then call end_call.',
     } }));
     this.later(Math.max(limitMs - 3000, 15000), () => this.hangup());
+  }
+
+  // The script for this call: the version picked when it was placed (A or B), edited in the dashboard,
+  // or the built-in prompts/sales-agent.md.
+  template() {
+    const p = this.config.prompt;
+    return (this.variant === 'B' && p.b) || p.a || this.promptTemplate;
   }
 
   logError(err) {

@@ -113,6 +113,28 @@ export const MIGRATIONS = [
       'ALTER TABLE leads ADD COLUMN followup_sent_at TEXT',
     ],
   },
+  {
+    // Campaigns (pausable call lists), script A/B testing, costs and analytics.
+    version: 8,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS campaigns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        variant_mode TEXT NOT NULL DEFAULT 'A',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+      'ALTER TABLE leads ADD COLUMN campaign_id INTEGER',
+      'ALTER TABLE leads ADD COLUMN emailed INTEGER',
+      'ALTER TABLE queue_items ADD COLUMN campaign_id INTEGER',
+      'ALTER TABLE calls ADD COLUMN campaign_id INTEGER',
+      'ALTER TABLE calls ADD COLUMN variant TEXT',
+      'ALTER TABLE calls ADD COLUMN talked INTEGER',
+      'ALTER TABLE calls ADD COLUMN usage TEXT',
+      'ALTER TABLE calls ADD COLUMN cost_cents REAL',
+      'CREATE INDEX IF NOT EXISTS idx_calls_created ON calls(created_at)',
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).version;

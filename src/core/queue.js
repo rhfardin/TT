@@ -5,7 +5,7 @@ import { placeCall, providerProblem } from './actions.js';
 
 const MAX_ITEMS_PER_RUN = 6; // keeps one run well inside Cloudflare's per-request query limit
 
-export async function enqueueLeads(ctx, idList, { ignoreWindow = false, now = new Date() } = {}) {
+export async function enqueueLeads(ctx, idList, { ignoreWindow = false, now = new Date(), campaignId = null } = {}) {
   const { store, config } = ctx;
   const unique = [...new Set(idList.map(Number).filter(Number.isFinite))].slice(0, 5000);
   const leads = new Map((await store.getLeadsByIds(unique)).map((l) => [l.id, l]));
@@ -22,8 +22,9 @@ export async function enqueueLeads(ctx, idList, { ignoreWindow = false, now = ne
     }
   }
   if (accepted.length) {
-    await store.enqueueMany(accepted, now.toISOString(), ignoreWindow, 'manual');
-    await store.markInCampaign(accepted);
+    await store.enqueueMany(accepted, now.toISOString(), ignoreWindow, campaignId ? 'campaign' : 'manual', campaignId);
+    if (campaignId) await store.setLeadsCampaign(accepted, campaignId);
+    else await store.markInCampaign(accepted);
   }
   return results;
 }
@@ -51,7 +52,7 @@ export async function runDue(ctx, now = new Date()) {
       }
       continue;
     }
-    const r = await placeCall(ctx, lead.id, { ignoreWindow: true });
+    const r = await placeCall(ctx, lead.id, { ignoreWindow: true, campaignId: item.campaign_id });
     await store.deleteQueueItem(item.id);
     if (!r.ok) {
       await store.logEvent(lead.id, 'queue_skip', r.error);
@@ -70,4 +71,7 @@ export async function queueState(ctx) {
   return { ...stats, active: await ctx.store.activeCallCount() };
 }
 
-export const clearQueue = (ctx) => ctx.store.clearQueue();
+export async function clearQueue(ctx) {
+  await ctx.store.clearQueue();
+  await ctx.store.stopAllCampaigns();
+}

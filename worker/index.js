@@ -48,7 +48,7 @@ async function makeCtx(env, publicUrl) {
   const store = createStore(d1(env.DB));
   // Settings saved in the dashboard override wrangler.jsonc vars and secrets.
   const config = buildConfig({ ...env, ...(await store.getSettings()), PUBLIC_URL: env.PUBLIC_URL || publicUrl });
-  const ctx = { config, env, store, sendEmail: resendSender(config.email) };
+  const ctx = { config, env, store, sendEmail: resendSender(config.email), defaultPrompt: promptTemplate };
   // The queue is in D1; the Dialer Durable Object only wakes up to work through it.
   ctx.queue = { poke: () => env.DIALER.get(env.DIALER.idFromName('main')).poke(config.publicUrl) };
   return ctx;

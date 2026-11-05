@@ -75,3 +75,8 @@ test('checkLead stops final statuses and max attempts', () => {
   assert.equal(checkLead({ status: 'new', attempts: 3 }, calling, { ignoreWindow: true }).ok, false);
   assert.equal(checkLead({ status: 'new', attempts: 0 }, calling, { ignoreWindow: true }).ok, true);
 });
+
+test('an "Emailed" column is read as yes/no', () => {
+  const r = rowsToLeads([['Business', 'Phone', 'Emailed'], ['A', '5125550100', 'Yes'], ['B', '5125550101', 'no'], ['C', '5125550102', '']], '1');
+  assert.deepEqual(r.leads.map((l) => l.emailed), [1, 0, null]);
+});

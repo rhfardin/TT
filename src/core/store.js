@@ -5,9 +5,10 @@ import { UPSERT_LEAD_SQL, upsertArgs, FINAL_STATUSES } from './leads.js';
 
 const LEAD_COLUMNS = new Set(['business_name', 'contact_name', 'phone', 'email', 'website', 'demo_link', 'category',
   'city', 'timezone', 'notes', 'status', 'attempts', 'last_called_at', 'last_summary', 'meeting_time', 'is_test', 'in_campaign',
-  'hot_at', 'hot_reason', 'handled_at', 'followup_due_at', 'followup_sent_at']);
+  'hot_at', 'hot_reason', 'handled_at', 'followup_due_at', 'followup_sent_at', 'campaign_id', 'emailed']);
 const CALL_COLUMNS = new Set(['conversation_id', 'call_sid', 'status', 'error', 'duration_secs', 'summary',
-  'transcript', 'outcome', 'ended_at', 'answered_by', 'recording_sid', 'transfer_state', 'transfer_summary']);
+  'transcript', 'outcome', 'ended_at', 'answered_by', 'recording_sid', 'transfer_state', 'transfer_summary',
+  'campaign_id', 'variant', 'talked', 'usage', 'cost_cents']);
 
 function setClause(fields, allowed) {
   const keys = Object.keys(fields).filter((k) => allowed.has(k));
@@ -115,17 +116,20 @@ export function createStore(db) {
     nextCallAt: async (leadId) => (await db.get('SELECT not_before FROM queue_items WHERE lead_id = ?', Number(leadId)))?.not_before ?? null,
     queuedLeadIds: async (list) =>
       (await db.all('SELECT lead_id FROM queue_items WHERE lead_id IN (SELECT value FROM json_each(?))', ids(list))).map((r) => r.lead_id),
-    enqueueMany: (list, notBeforeIso, ignoreWindow, reason) =>
-      db.run(`INSERT INTO queue_items (lead_id, not_before, ignore_window, reason)
-              SELECT value, ?, ?, ? FROM json_each(?) WHERE true ON CONFLICT(lead_id) DO NOTHING`,
-      notBeforeIso, ignoreWindow ? 1 : 0, reason, ids(list)),
+    enqueueMany: (list, notBeforeIso, ignoreWindow, reason, campaignId = null) =>
+      db.run(`INSERT INTO queue_items (lead_id, not_before, ignore_window, reason, campaign_id)
+              SELECT value, ?, ?, ?, ? FROM json_each(?) WHERE true ON CONFLICT(lead_id) DO NOTHING`,
+      notBeforeIso, ignoreWindow ? 1 : 0, reason, campaignId, ids(list)),
     // Adds or moves one lead's queue entry (used for retries).
-    scheduleLead: (leadId, notBeforeIso, reason) =>
-      db.run(`INSERT INTO queue_items (lead_id, not_before, reason) VALUES (?, ?, ?)
+    scheduleLead: (leadId, notBeforeIso, reason, campaignId = null) =>
+      db.run(`INSERT INTO queue_items (lead_id, not_before, reason, campaign_id) VALUES (?, ?, ?, ?)
               ON CONFLICT(lead_id) DO UPDATE SET not_before = excluded.not_before, reason = excluded.reason, claimed_at = NULL`,
-      Number(leadId), notBeforeIso, reason),
+      Number(leadId), notBeforeIso, reason, campaignId),
+    // Paused or stopped campaigns hold their place in the queue without being called.
     nextDueItem: (nowIso) =>
-      db.get('SELECT * FROM queue_items WHERE claimed_at IS NULL AND not_before <= ? ORDER BY not_before, id LIMIT 1', nowIso),
+      db.get(`SELECT q.* FROM queue_items q LEFT JOIN campaigns c ON c.id = q.campaign_id
+              WHERE q.claimed_at IS NULL AND q.not_before <= ? AND (q.campaign_id IS NULL OR c.status = 'running')
+              ORDER BY q.not_before, q.id LIMIT 1`, nowIso),
     async claimQueueItem(id) {
       const r = await db.run('UPDATE queue_items SET claimed_at = ? WHERE id = ? AND claimed_at IS NULL', new Date().toISOString(), id);
       return r.changes === 1;
@@ -135,10 +139,32 @@ export function createStore(db) {
     deleteQueueItem: (id) => db.run('DELETE FROM queue_items WHERE id = ?', id),
     dequeueLead: (leadId) => db.run('DELETE FROM queue_items WHERE lead_id = ?', Number(leadId)),
     async queueStats() {
-      const r = await db.get('SELECT COUNT(*) AS n, MIN(not_before) AS next_at FROM queue_items WHERE claimed_at IS NULL');
+      const r = await db.get(`SELECT COUNT(*) AS n, MIN(CASE WHEN q.campaign_id IS NULL OR c.status = 'running' THEN q.not_before END) AS next_at
+                              FROM queue_items q LEFT JOIN campaigns c ON c.id = q.campaign_id WHERE q.claimed_at IS NULL`);
       return { pending: r.n, nextAt: r.next_at ?? null };
     },
     clearQueue: () => db.run('DELETE FROM queue_items'),
+
+    // ---- Campaigns ----
+    async createCampaign(name, variantMode) {
+      return (await db.run('INSERT INTO campaigns (name, variant_mode) VALUES (?, ?)', name, variantMode)).lastId;
+    },
+    getCampaign: (id) => db.get('SELECT * FROM campaigns WHERE id = ?', Number(id)),
+    setCampaignStatus: (id, status) => db.run('UPDATE campaigns SET status = ? WHERE id = ?', status, Number(id)),
+    stopAllCampaigns: () => db.run("UPDATE campaigns SET status = 'stopped' WHERE status != 'stopped'"),
+    dequeueCampaign: (id) => db.run('DELETE FROM queue_items WHERE campaign_id = ?', Number(id)),
+    setLeadsCampaign: (list, campaignId) =>
+      db.run('UPDATE leads SET campaign_id = ?, in_campaign = 1 WHERE id IN (SELECT value FROM json_each(?))', campaignId, ids(list)),
+    // Each campaign with its progress: how many are still waiting, were reached, are interested or said yes.
+    listCampaigns: () => db.all(`
+      SELECT c.*,
+        (SELECT COUNT(*) FROM leads l WHERE l.campaign_id = c.id) AS total,
+        (SELECT COUNT(*) FROM queue_items q WHERE q.campaign_id = c.id) AS waiting,
+        (SELECT COUNT(*) FROM calls k WHERE k.campaign_id = c.id) AS calls,
+        (SELECT COUNT(*) FROM calls k WHERE k.campaign_id = c.id AND k.talked = 1) AS talked,
+        (SELECT COUNT(*) FROM leads l WHERE l.campaign_id = c.id AND l.status = 'interested') AS interested,
+        (SELECT COUNT(*) FROM leads l WHERE l.campaign_id = c.id AND l.status = 'won') AS won
+      FROM campaigns c ORDER BY c.id DESC LIMIT 50`),
     releaseStaleClaims: (olderThanIso) => db.run('UPDATE queue_items SET claimed_at = NULL WHERE claimed_at < ?', olderThanIso),
 
     // ---- Dashboard sessions and login attempts ----

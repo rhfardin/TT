@@ -53,7 +53,7 @@ function smtpSender(cfg) {
 // Settings saved in the dashboard are layered over the environment, so each request builds a fresh context.
 async function makeCtx() {
   const cfg = buildConfig({ ...process.env, ...(await store.getSettings()) });
-  return { config: cfg, env: process.env, store, queue, sendEmail: resendSender(cfg.email) || smtpSender(cfg) };
+  return { config: cfg, env: process.env, store, queue, sendEmail: resendSender(cfg.email) || smtpSender(cfg), defaultPrompt: promptTemplate() };
 }
 
 // ---- Call queue: the queue is in the database; this timer works through it one call at a time ----

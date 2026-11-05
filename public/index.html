@@ -92,6 +92,12 @@
   .savebar { position: sticky; bottom: 0; background: var(--bg); padding: 12px 0; display: flex; gap: 10px; align-items: center; }
 
   #login { max-width: 360px; margin: 14vh auto; }
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 20px; }
+  dialog::backdrop { background: rgba(0,0,0,.35); }
+  .camp { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .camp:first-child { border-top: 0; }
+  .bar { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 6px; }
+  .bar > span { display: block; height: 100%; background: var(--accent); }
   #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 10px; display: none; max-width: 90vw; z-index: 10; }
 
   @media (max-width: 760px) {
@@ -119,6 +125,7 @@
   <header><div class="bar">
     <span class="logo">AI Caller</span>
     <button class="tab active" data-tab="leads">Businesses</button>
+    <button class="tab" data-tab="script">Script</button>
     <button class="tab" data-tab="settings">Settings</button>
     <span class="spacer"></span>
     <button class="small" id="logout">Log out</button>
@@ -130,6 +137,11 @@
       <div class="card banner" id="setupBanner" hidden>
         <span><b>Almost ready.</b> <span id="setupText"></span></span>
         <button class="small primary" data-goto="settings">Open Settings</button>
+      </div>
+
+      <div class="card" id="campaigns" hidden>
+        <h2 style="margin:0 0 6px;font-size:17px">Campaigns</h2>
+        <div id="campaignList"></div>
       </div>
 
       <div class="card needs" id="needsYou" hidden>
@@ -156,6 +168,28 @@
     </section>
 
     <!-- ===== Settings ===== -->
+    <section id="tab-script" class="settings" hidden>
+      <div class="card">
+        <h2>Sales script</h2>
+        <p class="muted" style="margin:0">What the AI is told before every call. Edit it in plain words. These fill in automatically:
+          <code>{{business_name}}</code> <code>{{contact_name_or_owner}}</code> <code>{{category}}</code> <code>{{city_phrase}}</code>
+          <code>{{website}}</code> <code>{{business_notes}}</code> <code>{{your_name}}</code> <code>{{your_company}}</code>
+          <code>{{agent_name}}</code> <code>{{price_answer}}</code> <code>{{offer_phrase}}</code> <code>{{business_knowledge}}</code>
+          <code>{{outreach_history}}</code>. Saying it's an AI is always added, whatever the script says.</p>
+        <label style="margin-top:12px">Script A (main)</label>
+        <textarea id="scriptA" style="min-height:360px;font-family:ui-monospace,monospace;font-size:13px"></textarea>
+        <div class="row" style="margin-top:8px"><button class="primary" id="saveScriptA">Save script A</button>
+          <button id="resetScriptA">Reset to the built-in script</button><span id="scriptAResult" class="muted"></span></div>
+      </div>
+      <div class="card">
+        <h2>Script B (optional, for testing)</h2>
+        <p class="muted" style="margin:0">Write a second version, then start a campaign with "Split A and B" to see which one gets more interested businesses (Results tab).</p>
+        <textarea id="scriptB" style="min-height:200px;margin-top:10px;font-family:ui-monospace,monospace;font-size:13px" placeholder="Empty: no script B"></textarea>
+        <div class="row" style="margin-top:8px"><button class="primary" id="saveScriptB">Save script B</button>
+          <button id="copyAtoB">Copy script A here</button><span id="scriptBResult" class="muted"></span></div>
+      </div>
+    </section>
+
     <section id="tab-settings" class="settings" hidden>
       <div class="card">
         <h2>Test call</h2>
@@ -346,6 +380,18 @@
   </main>
 </div>
 
+<dialog id="campaignDialog">
+  <form method="dialog" id="campaignForm" style="min-width:min(420px,85vw)">
+    <h2 style="margin-top:0;font-size:18px">Start calling</h2>
+    <p class="muted" id="campaignCount" style="margin-top:0"></p>
+    <label>Campaign name</label><input id="campaignName" placeholder="Dentists, Austin">
+    <label style="margin-top:10px">Script</label>
+    <select id="campaignVariant"><option value="A">Script A</option><option value="B">Script B</option><option value="AB">Split A and B (test which works better)</option></select>
+    <p class="help">Calls go out one at a time, each during the business's own calling hours. You can pause or stop it any time.</p>
+    <div class="row" style="justify-content:flex-end;margin-top:12px"><button value="cancel" type="button" id="campaignCancel">Cancel</button><button class="primary" value="ok">Start calling</button></div>
+  </form>
+</dialog>
+
 <aside id="drawer"></aside>
 <div id="toast"></div>
 
@@ -410,9 +456,9 @@ $('#logout').onclick = async () => { await api('/api/logout', { method: 'POST' }
 // ---------- Tabs ----------
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
-  $('#tab-leads').hidden = name !== 'leads';
-  $('#tab-settings').hidden = name !== 'settings';
+  for (const t of ['leads', 'script', 'settings']) $(`#tab-${t}`).hidden = name !== t;
   if (name === 'settings') loadSettings();
+  if (name === 'script') loadScript();
 }
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-tab],[data-goto]');
@@ -443,6 +489,56 @@ $('#needsList').onclick = async (e) => {
     loadNeedsYou();
   }
 };
+
+async function loadCampaigns() {
+  const { campaigns } = await api('/api/campaigns');
+  const shown = campaigns.filter((c) => c.status !== 'stopped' || c.waiting).slice(0, 8);
+  $('#campaigns').hidden = !shown.length;
+  const label = { running: ['Calling', 'good'], paused: ['Paused', 'warn'], stopped: ['Stopped', ''] };
+  $('#campaignList').innerHTML = shown.map((c) => {
+    const done = c.total ? Math.round(((c.total - c.waiting) / c.total) * 100) : 0;
+    const finished = c.status === 'running' && !c.waiting;
+    const [l, cls] = finished ? ['Finished', ''] : label[c.status] || [c.status, ''];
+    return `<div class="camp">
+      <div style="flex:1;min-width:220px"><b>${esc(c.name)}</b> <span class="pill ${cls}">${l}</span>
+        ${c.variant_mode !== 'A' ? `<span class="pill">${c.variant_mode === 'AB' ? 'A/B test' : 'Script B'}</span>` : ''}
+        <div class="sub muted">${Number(c.total)} businesses · ${Number(c.waiting)} waiting · ${Number(c.talked)} talked · ${Number(c.interested)} interested · ${Number(c.won)} won</div>
+        <div class="bar"><span style="width:${done}%"></span></div></div>
+      ${c.status === 'running' && !finished ? `<button class="small" data-camp="${c.id}" data-act="pause">Pause</button>` : ''}
+      ${c.status === 'paused' ? `<button class="small primary" data-camp="${c.id}" data-act="resume">Resume</button>` : ''}
+      ${c.status !== 'stopped' && !finished ? `<button class="small" data-camp="${c.id}" data-act="stop">Stop</button>` : ''}
+    </div>`;
+  }).join('');
+}
+$('#campaignList').onclick = async (e) => {
+  const b = e.target.closest('[data-camp]');
+  if (!b) return;
+  if (b.dataset.act === 'stop' && !confirm('Stop this campaign? Businesses still waiting in it won\'t be called.')) return;
+  await api(`/api/campaigns/${b.dataset.camp}/${b.dataset.act}`, { method: 'POST', body: '{}' });
+  refresh();
+};
+
+let scriptDefault = '';
+async function loadScript() {
+  const r = await api('/api/script');
+  scriptDefault = r.default;
+  $('#scriptA').value = r.a || r.default;
+  $('#scriptB').value = r.b || '';
+}
+async function saveScript(key, value, out) {
+  try {
+    await api('/api/settings', { method: 'PUT', body: JSON.stringify({ [key]: value }) });
+    $(out).textContent = 'Saved. The next call uses it.';
+  } catch (err) { $(out).textContent = err.message; }
+}
+$('#saveScriptA').onclick = () => saveScript('PROMPT_TEMPLATE', $('#scriptA').value.trim() === scriptDefault.trim() ? '' : $('#scriptA').value, '#scriptAResult');
+$('#resetScriptA').onclick = async () => {
+  if (!confirm('Replace script A with the built-in script?')) return;
+  $('#scriptA').value = scriptDefault;
+  await saveScript('PROMPT_TEMPLATE', '', '#scriptAResult');
+};
+$('#saveScriptB').onclick = () => saveScript('PROMPT_TEMPLATE_B', $('#scriptB').value, '#scriptBResult');
+$('#copyAtoB').onclick = () => { $('#scriptB').value = $('#scriptA').value; };
 
 async function loadStatus() {
   const s = await api('/api/status');
@@ -541,10 +637,17 @@ async function callOne(id, { name, resetTries = false } = {}) {
   refresh();
 }
 
-$('#callSelected').onclick = async () => {
-  if (!confirm(`Call ${selected.size} businesses? They'll be called one after another, each during its own calling hours.`)) return;
+$('#callSelected').onclick = () => {
+  $('#campaignCount').textContent = `${selected.size} businesses selected.`;
+  $('#campaignName').value = '';
+  $('#campaignDialog').showModal();
+};
+$('#campaignCancel').onclick = () => $('#campaignDialog').close();
+$('#campaignForm').onsubmit = async (e) => {
+  e.preventDefault();
+  $('#campaignDialog').close();
   try {
-    const r = await api('/api/call-batch', { method: 'POST', body: JSON.stringify({ ids: [...selected] }) });
+    const r = await api('/api/campaigns', { method: 'POST', body: JSON.stringify({ ids: [...selected], name: $('#campaignName').value, variant: $('#campaignVariant').value }) });
     const queued = r.results.filter((x) => x.queued).length;
     const skipped = r.results.filter((x) => !x.queued);
     toast(`${queued} added to the call list.` + (skipped.length ? ` ${skipped.length} skipped (${skipped[0].reason}).` : ''));
@@ -740,7 +843,7 @@ $('#testCall').onclick = async () => {
 };
 
 // ---------- Start ----------
-function refresh() { return Promise.all([loadStatus(), loadLeads(), loadNeedsYou()]).catch(() => {}); }
+function refresh() { return Promise.all([loadStatus(), loadLeads(), loadNeedsYou(), loadCampaigns()]).catch(() => {}); }
 async function start() {
   $('#login').hidden = true; $('#app').hidden = false;
   await refresh();

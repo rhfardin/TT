@@ -145,6 +145,33 @@ export async function handleRequest(ctx, req) {
     }
   }
 
+  // ---- Campaigns: a named call list that can be paused, resumed and stopped ----
+  if (path === '/api/campaigns' && method === 'GET') return ok({ campaigns: await store.listCampaigns() });
+  if (path === '/api/campaigns' && method === 'POST') {
+    const ids = Array.isArray(body.ids) ? body.ids : [];
+    if (!ids.length) return ok({ error: 'Pick the businesses to call first' }, 400);
+    const variant = ['A', 'B', 'AB'].includes(body.variant) ? body.variant : 'A';
+    if (variant !== 'A' && !config.prompt.b) return ok({ error: 'Write script B in Settings → Script first' }, 400);
+    const name = String(body.name || '').trim().slice(0, 100) || `Calls ${new Date().toISOString().slice(0, 10)}`;
+    const campaignId = await store.createCampaign(name, variant);
+    const results = await enqueueLeads(ctx, ids, { campaignId });
+    await ctx.queue.poke();
+    return ok({ campaignId, results });
+  }
+  if (method === 'POST' && (m = path.match(/^\/api\/campaigns\/(\d+)\/(pause|resume|stop)$/))) {
+    const id = Number(m[1]);
+    if (!(await store.getCampaign(id))) return ok({ error: 'not found' }, 404);
+    if (m[2] === 'stop') await store.dequeueCampaign(id);
+    await store.setCampaignStatus(id, { pause: 'paused', resume: 'running', stop: 'stopped' }[m[2]]);
+    if (m[2] === 'resume') await ctx.queue.poke();
+    return ok({ ok: true });
+  }
+
+  // ---- The sales script (OpenAI calls) ----
+  if (path === '/api/script' && method === 'GET') {
+    return ok({ default: ctx.defaultPrompt ?? '', a: config.prompt.a, b: config.prompt.b });
+  }
+
   if (method === 'GET' && path === '/api/needs-you') return ok({ leads: await store.needsYou() });
   if (method === 'POST' && (m = path.match(/^\/api\/leads\/(\d+)\/handled$/))) {
     await store.updateLead(Number(m[1]), { handled_at: new Date().toISOString() });

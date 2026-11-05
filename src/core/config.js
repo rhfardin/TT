@@ -36,6 +36,10 @@ export function buildConfig(e) {
       phone: env('TRANSFER_PHONE'),
     },
 
+    // The sales script edited in the dashboard (empty = prompts/sales-agent.md), and an optional second
+    // version (B) that campaigns can test against it.
+    prompt: { a: env('PROMPT_TEMPLATE'), b: env('PROMPT_TEMPLATE_B') },
+
     // Alerts to the owner about hot leads, and the optional follow-up email to businesses.
     alerts: {
       email: env('ALERT_EMAIL'),

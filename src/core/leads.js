@@ -39,12 +39,13 @@ const ALIASES = {
     exact: ['notes', 'details', 'detail', 'description', 'info', 'about', 'comments', 'business details'],
     contains: ['notes', 'details', 'description'],
   },
+  emailed: { exact: ['emailed', 'email sent', 'emailed before', 'contacted', 'contacted before'], contains: ['emailed', 'email sent'] },
 };
 // Links that are never the business's website or the redesign preview.
 const NOT_A_SITE = /linkedin|facebook|instagram|twitter|tiktok|youtube|yelp|google|maps|review/;
 
 export const LEAD_FIELDS = Object.keys(ALIASES);
-const CONTAINS_ORDER = ['email', 'phone', 'timezone', 'demo_link', 'website', 'business_name', 'contact_name', 'category', 'city', 'notes'];
+const CONTAINS_ORDER = ['emailed', 'email', 'phone', 'timezone', 'demo_link', 'website', 'business_name', 'contact_name', 'category', 'city', 'notes'];
 
 const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
@@ -97,6 +98,8 @@ export function normalizePhone(raw, countryCode = '1') {
   return '+' + intl;
 }
 
+const yesNo = (v) => (v == null ? null : /^(y|yes|true|1|x|sent|✓)$/i.test(v.trim()) ? 1 : /^(n|no|false|0|not sent)$/i.test(v.trim()) ? 0 : null);
+
 // rows: array of arrays of strings, first row = headers.
 export function rowsToLeads(rows, countryCode) {
   if (!Array.isArray(rows) || rows.length < 2) throw new Error('The sheet needs a header row and at least one business.');
@@ -126,6 +129,7 @@ export function rowsToLeads(rows, countryCode) {
     const lead = { phone, extra: JSON.stringify(extra) };
     for (const f of LEAD_FIELDS) if (f !== 'phone') lead[f] = get(f);
     lead.business_name = name;
+    lead.emailed = yesNo(lead.emailed);
     // The same number twice in one sheet: later rows fill in what earlier rows left empty.
     const prev = byPhone.get(phone);
     if (prev) {
@@ -140,8 +144,8 @@ export function rowsToLeads(rows, countryCode) {
 }
 
 export const UPSERT_LEAD_SQL = `
-  INSERT INTO leads (business_name, contact_name, phone, email, website, demo_link, category, city, timezone, notes, extra)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO leads (business_name, contact_name, phone, email, website, demo_link, category, city, timezone, notes, extra, emailed)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(phone) DO UPDATE SET
     business_name = excluded.business_name,
     contact_name = COALESCE(excluded.contact_name, leads.contact_name),
@@ -152,10 +156,11 @@ export const UPSERT_LEAD_SQL = `
     city = COALESCE(excluded.city, leads.city),
     timezone = COALESCE(excluded.timezone, leads.timezone),
     notes = COALESCE(excluded.notes, leads.notes),
+    emailed = COALESCE(excluded.emailed, leads.emailed),
     extra = excluded.extra`;
 
 export const upsertArgs = (l) => [l.business_name, l.contact_name, l.phone, l.email, l.website, l.demo_link,
-  l.category, l.city, l.timezone, l.notes, l.extra];
+  l.category, l.city, l.timezone, l.notes, l.extra, l.emailed ?? null];
 
 // ---- Timezones and calling hours ----
 

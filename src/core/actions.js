@@ -51,6 +51,10 @@ export async function placeCall(ctx, leadId, opts = {}) {
     return { ok: false, error: 'this business is already being called' };
   }
   const callId = await store.insertCall(lead.id);
+  // Script version: campaigns can test a second script (B) against the main one (A).
+  const campaign = opts.campaignId ? await store.getCampaign(opts.campaignId) : null;
+  const variant = campaign?.variant_mode === 'B' ? 'B' : campaign?.variant_mode === 'AB' ? (lead.id % 2 ? 'B' : 'A') : 'A';
+  await store.updateCall(callId, { campaign_id: campaign?.id ?? null, variant });
   try {
     let conversationId = null;
     let callSid;
@@ -124,7 +128,7 @@ export async function scheduleRetry(ctx, leadId, reason) {
   const hours = reason === 'voicemail' ? config.calling.retryVoicemailHours : config.calling.retryNoAnswerHours;
   const shift = lead.attempts % 2 ? 3 : -2;
   const at = nextWindowStart(lead, config.calling, new Date(Date.now() + (hours + shift) * 3600 * 1000));
-  await store.scheduleLead(lead.id, at.toISOString(), `retry after ${reason}`);
+  await store.scheduleLead(lead.id, at.toISOString(), `retry after ${reason}`, lead.campaign_id ?? null);
   await store.logEvent(lead.id, 'retry_scheduled', at.toISOString());
   await ctx.queue?.poke?.();
 }

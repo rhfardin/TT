@@ -41,6 +41,8 @@ export const SETTINGS = [
   { key: 'RECORD_CALLS' },
   { key: 'TRANSFER_ENABLED' },
   { key: 'TRANSFER_PHONE' },
+  { key: 'PROMPT_TEMPLATE', long: true },
+  { key: 'PROMPT_TEMPLATE_B', long: true },
   { key: 'ALERT_EMAIL' },
   { key: 'FOLLOWUP_DAYS' },
   { key: 'BUSINESS_ADDRESS' },
@@ -100,7 +102,7 @@ export function cleanSettingsUpdate(body, current = {}) {
   for (const [key, raw] of Object.entries(body || {})) {
     const def = BY_KEY[key];
     if (!def) continue;
-    const value = String(raw ?? '').trim().slice(0, 10000);
+    const value = String(raw ?? '').trim().slice(0, def.long ? 30000 : 10000);
     if (def.secret && !value) continue;
     const problem = value && VALIDATE[key]?.(value);
     if (problem) errors.push(`${LABELS[key]} ${problem}`);

@@ -39,6 +39,10 @@ export function promptVariables(lead, seller) {
     your_company: seller.company || 'our studio',
     offer_phrase: seller.price ? ` (${seller.price})` : '',
     business_knowledge: knowledgeText(seller),
+    // The sheet can say a business was never emailed; otherwise they were.
+    outreach_history: lead.emailed === 0
+      ? `${seller.yourName || 'The team'} hasn't been in touch with them before; this is the first contact.`
+      : `A few days ago ${seller.yourName || 'the team'} emailed them about it, and you're following up because emails get buried.`,
     price_answer: seller.price
       ? `It's ${seller.price}. Say it simply, then point out the preview is free to look at first.`
       : `Say ${seller.yourName || 'the team'} will go over pricing personally, it depends on what they need, and the preview is free.`,
@@ -53,6 +57,9 @@ export function promptVariables(lead, seller) {
 export function renderPrompt(template, lead, seller, { recording = false, transfer = 'unavailable', history = [], inbound = null, booking = false } = {}) {
   const vars = promptVariables(lead, seller);
   const name = seller.yourName || 'the owner';
+  // Always first, whatever the edited script says: the AI is honest about being an AI.
+  const always = '# Always\nYou are an AI voice assistant. Say so in your opening and whenever anyone asks. ' +
+    'Never claim or suggest that you are a human.\n\n';
   const callBack = booking
     ? `book a quick call with ${name} for them (check_availability, then book_meeting)`
     : `offer that ${name} calls them back today, and get the best time and number for that`;
@@ -96,7 +103,7 @@ export function renderPrompt(template, lead, seller, { recording = false, transf
       'Once they pick, confirm their name and email (spell the email back), call book_meeting with that exact start, ' +
       'then confirm the day and time back to them. Never make up a time that check_availability didn\'t give you.';
   }
-  return template.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? '') + extra;
+  return always + template.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? '') + extra;
 }
 
 // Used only if the person picks up and says nothing. Confirms the business first, like a person would.
