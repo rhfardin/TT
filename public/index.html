@@ -21,7 +21,7 @@
   body { margin: 0; font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
   [hidden] { display: none !important; }
   a { color: var(--accent); }
-  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 8px 14px; border-radius: 8px; cursor: pointer; }
+  button, .btn { font: inherit; display: inline-block; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 8px 14px; border-radius: 8px; cursor: pointer; }
   button:hover { border-color: var(--muted); }
   button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
   button.small { padding: 5px 11px; font-size: 14px; }
@@ -94,10 +94,21 @@
   #login { max-width: 360px; margin: 14vh auto; }
   dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 20px; }
   dialog::backdrop { background: rgba(0,0,0,.35); }
+  .rtable { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .rtable th, .rtable td { text-align: right; padding: 7px 8px; border-top: 1px solid var(--line); white-space: nowrap; }
+  .rtable th:first-child, .rtable td:first-child { text-align: left; white-space: normal; }
+  .rtable th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; border-top: 0; }
+  .table-wrap { overflow-x: auto; }
+  .daybars { display: flex; align-items: flex-end; gap: 3px; height: 120px; }
+  .daybars div { flex: 1; background: var(--accent); opacity: .85; border-radius: 3px 3px 0 0; min-height: 2px; }
+  .daylabels { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .live { animation: pulse 1.4s infinite; }
+  @keyframes pulse { 50% { opacity: .45; } }
+  .edit input, .edit textarea { margin-bottom: 8px; }
   .camp { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
   .camp:first-child { border-top: 0; }
-  .bar { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 6px; }
-  .bar > span { display: block; height: 100%; background: var(--accent); }
+  .progress { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 6px; }
+  .progress > span { display: block; height: 100%; background: var(--accent); }
   #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 10px; display: none; max-width: 90vw; z-index: 10; }
 
   @media (max-width: 760px) {
@@ -125,6 +136,7 @@
   <header><div class="bar">
     <span class="logo">AI Caller</span>
     <button class="tab active" data-tab="leads">Businesses</button>
+    <button class="tab" data-tab="results">Results</button>
     <button class="tab" data-tab="script">Script</button>
     <button class="tab" data-tab="settings">Settings</button>
     <span class="spacer"></span>
@@ -161,6 +173,8 @@
         <input type="file" id="file" accept=".xlsx,.xls,.csv" hidden>
         <input type="search" id="q" placeholder="Search businesses">
         <span class="spacer"></span>
+        <select id="bulkStatus" style="width:auto" hidden><option value="">Set status…</option></select>
+        <a class="btn" href="/api/export.csv" id="exportCsv" style="text-decoration:none">Export</a>
         <button id="callSelected" disabled>Call selected</button>
       </div>
 
@@ -168,6 +182,19 @@
     </section>
 
     <!-- ===== Settings ===== -->
+    <section id="tab-results" hidden>
+      <div class="toolbar">
+        <h2 style="margin:0;font-size:18px;flex:1">Results</h2>
+        <select id="resultsDays" style="width:auto"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option></select>
+      </div>
+      <div class="stats" id="kpis"></div>
+      <div class="card"><h2 style="margin:0 0 8px;font-size:16px">Calls per day</h2><div id="dayChart"></div></div>
+      <div class="card"><h2 style="margin:0 0 8px;font-size:16px">By campaign</h2><div class="table-wrap" id="byCampaign"></div></div>
+      <div class="card"><h2 style="margin:0 0 8px;font-size:16px">Script A vs B</h2><div class="table-wrap" id="byVariant"></div></div>
+      <div class="card"><h2 style="margin:0 0 8px;font-size:16px">By type of business</h2><div class="table-wrap" id="byCategory"></div></div>
+      <p class="muted">Spend is an estimate from OpenAI's reported usage and Twilio's list prices; check your OpenAI and Twilio bills for the exact amounts.</p>
+    </section>
+
     <section id="tab-script" class="settings" hidden>
       <div class="card">
         <h2>Sales script</h2>
@@ -456,8 +483,9 @@ $('#logout').onclick = async () => { await api('/api/logout', { method: 'POST' }
 // ---------- Tabs ----------
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
-  for (const t of ['leads', 'script', 'settings']) $(`#tab-${t}`).hidden = name !== t;
+  for (const t of ['leads', 'results', 'script', 'settings']) $(`#tab-${t}`).hidden = name !== t;
   if (name === 'settings') loadSettings();
+  if (name === 'results') loadResults();
   if (name === 'script') loadScript();
 }
 document.addEventListener('click', (e) => {
@@ -496,14 +524,14 @@ async function loadCampaigns() {
   $('#campaigns').hidden = !shown.length;
   const label = { running: ['Calling', 'good'], paused: ['Paused', 'warn'], stopped: ['Stopped', ''] };
   $('#campaignList').innerHTML = shown.map((c) => {
-    const done = c.total ? Math.round(((c.total - c.waiting) / c.total) * 100) : 0;
     const finished = c.status === 'running' && !c.waiting;
+    const done = finished ? 100 : c.total ? Math.round(((c.total - c.waiting) / c.total) * 100) : 0;
     const [l, cls] = finished ? ['Finished', ''] : label[c.status] || [c.status, ''];
     return `<div class="camp">
       <div style="flex:1;min-width:220px"><b>${esc(c.name)}</b> <span class="pill ${cls}">${l}</span>
         ${c.variant_mode !== 'A' ? `<span class="pill">${c.variant_mode === 'AB' ? 'A/B test' : 'Script B'}</span>` : ''}
         <div class="sub muted">${Number(c.total)} businesses · ${Number(c.waiting)} waiting · ${Number(c.talked)} talked · ${Number(c.interested)} interested · ${Number(c.won)} won</div>
-        <div class="bar"><span style="width:${done}%"></span></div></div>
+        <div class="progress"><span style="width:${done}%"></span></div></div>
       ${c.status === 'running' && !finished ? `<button class="small" data-camp="${c.id}" data-act="pause">Pause</button>` : ''}
       ${c.status === 'paused' ? `<button class="small primary" data-camp="${c.id}" data-act="resume">Resume</button>` : ''}
       ${c.status !== 'stopped' && !finished ? `<button class="small" data-camp="${c.id}" data-act="stop">Stop</button>` : ''}
@@ -515,6 +543,55 @@ $('#campaignList').onclick = async (e) => {
   if (!b) return;
   if (b.dataset.act === 'stop' && !confirm('Stop this campaign? Businesses still waiting in it won\'t be called.')) return;
   await api(`/api/campaigns/${b.dataset.camp}/${b.dataset.act}`, { method: 'POST', body: '{}' });
+  refresh();
+};
+
+// ---------- Results ----------
+const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '–');
+const money = (cents) => `$${(Number(cents || 0) / 100).toFixed(2)}`;
+const mins = (secs) => (secs ? `${Math.floor(secs / 60)}:${String(Math.round(secs % 60)).padStart(2, '0')}` : '–');
+function resultsTable(rows) {
+  if (!rows.length) return '<p class="muted">No calls yet.</p>';
+  return `<table class="rtable"><tr><th></th><th>Calls</th><th>Reached a person</th><th>Interested</th><th>Said yes</th><th>Avg talk</th><th>Spend</th></tr>` +
+    rows.map((r) => `<tr><td>${esc(r.label)}</td><td>${r.calls}</td><td>${r.talked} (${pct(r.talked, r.calls)})</td>
+      <td>${r.interested} (${pct(r.interested, r.talked)})</td><td>${r.won}</td><td>${mins(r.avg_talk_secs)}</td><td>${money(r.cost_cents)}</td></tr>`).join('') +
+    '</table>';
+}
+async function loadResults() {
+  const r = await api(`/api/analytics?days=${$('#resultsDays').value}`);
+  const t = r.totals || {};
+  const kpi = (n, l) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+  $('#kpis').innerHTML = [
+    kpi(t.calls || 0, 'Calls'),
+    kpi(pct(t.talked, t.calls), `Reached a person (${t.talked || 0})`),
+    kpi(t.interested || 0, `Interested (${pct(t.interested, t.talked)} of conversations)`),
+    kpi(t.won || 0, `Said yes${t.booked ? ` · ${t.booked} calls booked` : ''}`),
+    kpi(mins(t.avg_talk_secs), 'Average conversation'),
+    kpi(money(t.cost_cents), `Estimated spend${t.interested ? ` · ${money(t.cost_cents / t.interested)} per interested` : ''}`),
+  ].join('');
+  const max = Math.max(1, ...r.byDay.map((d) => d.calls));
+  $('#dayChart').innerHTML = r.byDay.length
+    ? `<div class="daybars">${r.byDay.map((d) => `<div title="${esc(d.label)}: ${d.calls} calls, ${d.talked} reached, ${d.interested} interested" style="height:${(d.calls / max) * 100}%"></div>`).join('')}</div>
+       <div class="daylabels"><span>${esc(r.byDay[0].label)}</span><span>${esc(r.byDay.at(-1).label)}</span></div>`
+    : '<p class="muted">No calls yet.</p>';
+  $('#byCampaign').innerHTML = resultsTable(r.campaigns);
+  $('#byVariant').innerHTML = resultsTable(r.variants.map((v) => ({ ...v, label: `Script ${v.label}` })));
+  $('#byCategory').innerHTML = resultsTable(r.categories);
+}
+$('#resultsDays').onchange = loadResults;
+
+// ---------- Change several businesses at once ----------
+$('#bulkStatus').innerHTML += Object.entries(STATUS).filter(([k]) => k !== 'calling').map(([k, [l]]) => `<option value="${k}">${l}</option>`).join('');
+$('#bulkStatus').onchange = async () => {
+  const status = $('#bulkStatus').value;
+  if (!status) return;
+  if (!confirm(`Set ${selected.size} businesses to "${STATUS[status][0]}"?`)) { $('#bulkStatus').value = ''; return; }
+  try {
+    await api('/api/leads/bulk', { method: 'POST', body: JSON.stringify({ ids: [...selected], status }) });
+    toast('Updated.');
+    selected.clear();
+  } catch (err) { toast(err.message); }
+  $('#bulkStatus').value = '';
   refresh();
 };
 
@@ -604,6 +681,7 @@ function render() {
       (totalLeads > leads.length ? `<div class="empty"><button id="loadMore">Show more (${leads.length} of ${totalLeads})</button></div>` : '');
   }
   $('#callSelected').disabled = !selected.size;
+  $('#bulkStatus').hidden = !selected.size;
   $('#callSelected').textContent = selected.size ? `Call ${selected.size} selected` : 'Call selected';
 }
 
@@ -716,8 +794,11 @@ function sheetRows(wb) {
 }
 
 // ---------- One business ----------
+let liveTimer;
 async function openLead(id) {
+  clearTimeout(liveTimer);
   const { lead, calls } = await api(`/api/leads/${id}`);
+  const live = calls[0] && ['ringing', 'in_progress', 'transferring'].includes(calls[0].status);
   const link = (u) => u ? `<a href="${esc(/^https?:/.test(u) ? u : 'https://' + u)}" target="_blank" rel="noopener">${esc(u)}</a>` : '';
   const rows = [['Owner', esc(lead.contact_name)], ['Phone', esc(lead.phone)], ['Email', esc(lead.email)],
     ['Website', link(lead.website)], ['Redesign', link(lead.demo_link)], ['Category', esc(lead.category)],
@@ -730,12 +811,22 @@ async function openLead(id) {
     <div class="row">
       <button class="primary" id="dCall">Call now</button>
       <select id="dStatus" style="width:auto">${Object.entries(STATUS).filter(([k]) => k !== 'calling' || lead.status === 'calling').map(([k, [l]]) => `<option value="${k}" ${k === lead.status ? 'selected' : ''} ${k === 'calling' ? 'disabled' : ''}>${l}</option>`).join('')}</select>
+      <button class="small" id="dEdit">Edit</button>
       <button class="small" id="dDelete" style="margin-left:auto">Delete</button>
     </div>
+    <form class="card edit" id="dEditForm" hidden>
+      ${[['contact_name', 'Owner / contact'], ['phone', 'Phone'], ['email', 'Email'], ['website', 'Website'], ['demo_link', 'Redesign link'],
+        ['category', 'Category'], ['city', 'City'], ['timezone', 'Timezone (e.g. America/Chicago)'], ['meeting_time', 'Follow up']]
+        .map(([k, l]) => `<label>${l}</label><input name="${k}" value="${esc(lead[k] || '')}">`).join('')}
+      <label>Notes</label><textarea name="notes">${esc(lead.notes || '')}</textarea>
+      <div class="row"><button class="primary">Save</button><button type="button" id="dEditCancel">Cancel</button></div>
+    </form>
     <h3>Calls</h3>
     ${calls.map((c) => `
       <div class="card">
         <div class="row"><b>${esc(new Date(c.created_at.replace(' ', 'T') + 'Z').toLocaleString())}</b>
+          ${live && c === calls[0] ? '<span class="pill warn live">Live</span>' : ''}
+          ${c.cost_cents ? `<span class="muted">~${money(c.cost_cents)}</span>` : ''}
           ${c.duration_secs ? `<span class="muted">${Math.round(c.duration_secs / 60 * 10) / 10} min</span>` : ''}</div>
         ${c.direction === 'inbound' ? '<p><span class="pill good">They called you</span></p>' : ''}
         ${/^(machine|fax)/.test(c.answered_by || '') ? '<p class="muted">Voicemail detected, so the AI hung up.</p>' : ''}
@@ -749,7 +840,7 @@ async function openLead(id) {
         ${c.transcript.length ? `<details><summary>Read the conversation</summary>${c.transcript.map((t) => `<div class="bubble ${t.role}">${esc(t.message)}</div>`).join('')}</details>` : ''}
       </div>`).join('') || '<p class="muted">Not called yet.</p>'}`;
   $('#drawer').classList.add('open');
-  $('#closeDrawer').onclick = () => $('#drawer').classList.remove('open');
+  $('#closeDrawer').onclick = () => { clearTimeout(liveTimer); $('#drawer').classList.remove('open'); };
   $('#dCall').onclick = async () => { await callOne(id, { name: lead.business_name, resetTries: true }); openLead(id); };
   $('#dStatus').onchange = async () => {
     try {
@@ -763,6 +854,19 @@ async function openLead(id) {
     await api(`/api/leads/${id}`, { method: 'DELETE' });
     $('#drawer').classList.remove('open'); refresh();
   };
+  $('#dEdit').onclick = () => { $('#dEditForm').hidden = false; };
+  $('#dEditCancel').onclick = () => { $('#dEditForm').hidden = true; };
+  $('#dEditForm').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify(Object.fromEntries(new FormData(e.target))) });
+      toast('Saved');
+      openLead(id);
+      refresh();
+    } catch (err) { toast(err.message); }
+  };
+  // While a call is going on, keep the conversation updating.
+  if (live) liveTimer = setTimeout(() => { if ($('#drawer').classList.contains('open') && $('#dEditForm').hidden) openLead(id); }, 2000);
 }
 
 // ---------- Settings ----------

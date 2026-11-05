@@ -181,6 +181,38 @@ export function createStore(db) {
       await db.run('DELETE FROM login_attempts WHERE at < ?', new Date(Date.now() - 24 * 3600 * 1000).toISOString());
     },
 
+    // ---- Results ----
+    // Calls since `sinceIso` (test calls left out), grouped by `by`: null (totals), 'campaign', 'variant',
+    // 'category' or 'day'. Interested = interested, sent the preview, booked or transferred; won = said yes.
+    analytics(sinceIso, by = null) {
+      const group = { campaign: "COALESCE(k.name, 'No campaign')", variant: "COALESCE(c.variant, 'A')",
+        category: "COALESCE(l.category, 'No category')", day: 'date(c.created_at)' }[by];
+      return db.all(`
+        SELECT ${group ? `${group} AS label,` : ''}
+          COUNT(*) AS calls,
+          SUM(CASE WHEN c.talked = 1 THEN 1 ELSE 0 END) AS talked,
+          SUM(CASE WHEN c.answered_by LIKE 'machine%' OR json_extract(c.outcome, '$.outcome') = 'voicemail' THEN 1 ELSE 0 END) AS voicemail,
+          SUM(CASE WHEN json_extract(c.outcome, '$.outcome') IN ('interested', 'link_sent', 'meeting_booked', 'transferred', 'sold') THEN 1 ELSE 0 END) AS interested,
+          SUM(CASE WHEN json_extract(c.outcome, '$.outcome') = 'meeting_booked' THEN 1 ELSE 0 END) AS booked,
+          SUM(CASE WHEN json_extract(c.outcome, '$.outcome') = 'sold' THEN 1 ELSE 0 END) AS won,
+          SUM(CASE WHEN c.direction = 'inbound' THEN 1 ELSE 0 END) AS inbound,
+          ROUND(AVG(CASE WHEN c.talked = 1 THEN c.duration_secs END)) AS avg_talk_secs,
+          ROUND(SUM(COALESCE(c.cost_cents, 0)), 2) AS cost_cents
+        FROM calls c JOIN leads l ON l.id = c.lead_id LEFT JOIN campaigns k ON k.id = c.campaign_id
+        WHERE l.is_test = 0 AND c.created_at >= datetime(?)
+        ${group ? `GROUP BY label ORDER BY ${by === 'day' ? 'label' : 'calls DESC'} LIMIT 60` : ''}`, sinceIso);
+    },
+    // Everything about every business, for the spreadsheet export.
+    exportLeads: () => db.all(`
+      SELECT l.business_name, l.contact_name, l.phone, l.email, l.website, l.demo_link, l.category, l.city, l.status,
+        l.attempts, l.last_called_at, l.meeting_time, l.hot_reason, l.last_summary,
+        (SELECT json_extract(c.outcome, '$.next_step') FROM calls c WHERE c.lead_id = l.id ORDER BY c.id DESC LIMIT 1) AS next_step,
+        (SELECT json_extract(c.outcome, '$.requests') FROM calls c WHERE c.lead_id = l.id ORDER BY c.id DESC LIMIT 1) AS requests,
+        k.name AS campaign, l.notes
+      FROM leads l LEFT JOIN campaigns k ON k.id = l.campaign_id WHERE l.is_test = 0 ORDER BY l.id LIMIT 50000`),
+    bulkStatus: (list, status) => db.run('UPDATE leads SET status = ? WHERE id IN (SELECT value FROM json_each(?)) AND status != ?',
+      status, ids(list), 'calling'),
+
     // ---- Events and settings ----
     async logEvent(leadId, kind, detail) {
       await db.run('INSERT INTO events (lead_id, kind, detail) VALUES (?, ?, ?)', leadId ?? null, kind,

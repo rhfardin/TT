@@ -1,6 +1,6 @@
 // Framework-free HTTP handlers for the dashboard API and the agent's tools.
 // req = { method, path, query: {}, body, headers: { cookie, 'x-tool-secret', 'x-requested-with' }, ip }
-// returns { status, json, headers? } or, for files, { status, raw: { body, contentType } }
+// returns { status, json, headers? } or, for files, { status, raw: { body, contentType, filename? } }
 // ctx = { config, env, store, sendEmail, queue: { poke() } }
 //   env: the raw environment variables (saved dashboard settings are layered on top of them in config)
 import { rowsToLeads, normalizePhone } from './leads.js';
@@ -170,6 +170,35 @@ export async function handleRequest(ctx, req) {
   // ---- The sales script (OpenAI calls) ----
   if (path === '/api/script' && method === 'GET') {
     return ok({ default: ctx.defaultPrompt ?? '', a: config.prompt.a, b: config.prompt.b });
+  }
+
+  // ---- Results and export ----
+  if (method === 'GET' && path === '/api/analytics') {
+    const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
+    const since = new Date(Date.now() - days * 864e5).toISOString();
+    const [totals, campaigns, variants, categories, byDay] = await Promise.all([
+      store.analytics(since), store.analytics(since, 'campaign'), store.analytics(since, 'variant'),
+      store.analytics(since, 'category'), store.analytics(since, 'day'),
+    ]);
+    return ok({ days, totals: totals[0], campaigns, variants, categories, byDay });
+  }
+  if (method === 'GET' && path === '/api/export.csv') {
+    const rows = await store.exportLeads();
+    const cols = ['business_name', 'contact_name', 'phone', 'email', 'website', 'demo_link', 'category', 'city', 'status',
+      'attempts', 'last_called_at', 'meeting_time', 'hot_reason', 'last_summary', 'next_step', 'requests', 'campaign', 'notes'];
+    const cell = (v) => {
+      let t = v == null ? '' : String(v);
+      if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`; // never let a cell run as a spreadsheet formula
+      return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+    };
+    const csv = '\ufeff' + [cols.join(','), ...rows.map((r) => cols.map((c) => cell(r[c])).join(','))].join('\r\n');
+    return { status: 200, raw: { body: csv, contentType: 'text/csv; charset=utf-8', filename: `businesses-${new Date().toISOString().slice(0, 10)}.csv` } };
+  }
+  if (method === 'POST' && path === '/api/leads/bulk') {
+    const ids = Array.isArray(body.ids) ? body.ids : [];
+    if (!SETTABLE_STATUSES.includes(body.status)) return ok({ error: 'That status can’t be set by hand' }, 400);
+    await store.bulkStatus(ids, body.status);
+    return ok({ ok: true });
   }
 
   if (method === 'GET' && path === '/api/needs-you') return ok({ leads: await store.needsYou() });

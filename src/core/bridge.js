@@ -13,6 +13,7 @@ import {
   UNKNOWN_CALLER, checkAvailability, bookMeeting,
 } from './actions.js';
 import { calcomReady } from './calcom.js';
+import { addUsage } from './costs.js';
 import { safeEqual } from './crypto.js';
 
 // Duration of a base64 chunk of 8 kHz mu-law audio (1 byte per sample).
@@ -53,6 +54,7 @@ export class CallBridge {
     this.marks = []; // marks sent to Twilio whose audio hasn't played yet
     this.markSeq = 0;
     this.item = null; // { id, startTs, sentMs } for the assistant item currently being played
+    this.usage = {}; // OpenAI tokens used, for the cost estimate
   }
 
   later(ms, fn) {
@@ -114,6 +116,7 @@ export class CallBridge {
     this.variant = call.variant || 'A';
     if (resume) {
       this.transcript = JSON.parse(call.transcript || '[]');
+      this.usage = JSON.parse(call.usage || '{}');
       this.startedAt = Date.parse(`${call.created_at.replace(' ', 'T')}Z`) || this.startedAt; // time limit counts the whole call
     }
     await this.ctx.store.updateCall(callId, { status: 'in_progress', call_sid: this.callSid });
@@ -231,19 +234,32 @@ export class CallBridge {
         this.interrupt();
         break;
       case 'conversation.item.input_audio_transcription.completed':
-        if (ev.transcript?.trim()) this.transcript.push({ role: 'user', message: ev.transcript.trim(), t: this.elapsed() });
+        if (ev.transcript?.trim()) this.addLine('user', ev.transcript);
         break;
       case 'response.output_audio_transcript.done':
       case 'response.audio_transcript.done':
-        if (ev.transcript?.trim()) this.transcript.push({ role: 'agent', message: ev.transcript.trim(), t: this.elapsed() });
+        if (ev.transcript?.trim()) this.addLine('agent', ev.transcript);
         break;
       case 'response.done':
+        this.usage = addUsage(this.usage, ev.response?.usage);
         this.handleFunctionCalls(ev.response?.output ?? []).catch((err) => this.logError(err));
         break;
       case 'error':
         this.logError(ev.error?.message || JSON.stringify(ev.error));
         break;
     }
+  }
+
+  // Adds a line and saves the transcript shortly after, so the dashboard can show the call live.
+  addLine(role, text) {
+    this.transcript.push({ role, message: text.trim(), t: this.elapsed() });
+    if (this.saveTimer) return;
+    this.saveTimer = this.later(1500, () => {
+      this.saveTimer = null;
+      if (!this.closed && this.callId) {
+        this.ctx.store.updateCall(this.callId, { transcript: JSON.stringify(this.transcript) }).catch(() => {});
+      }
+    });
   }
 
   playAudio(ev) {
@@ -323,6 +339,7 @@ export class CallBridge {
     const t = this.transferring;
     if (!t || t.started || this.closed) return;
     t.started = true;
+    await this.ctx.store.updateCall(this.callId, { usage: JSON.stringify(this.usage) }); // for the cost once it ends
     const r = await startTransfer(this.ctx, this.callId, { callSid: this.callSid, summary: t.summary, transcript: this.transcript });
     if (r.ok) {
       this.endReason = 'transfer';
@@ -356,7 +373,7 @@ export class CallBridge {
       const duration = this.elapsed();
       // Voicemail detection fired during the call: no need to analyse a greeting message.
       const call = await this.ctx.store.getCall(this.callId);
-      if (isMachine(call?.answered_by)) return await recordVoicemail(this.ctx, this.callId, duration);
+      if (isMachine(call?.answered_by)) return await recordVoicemail(this.ctx, this.callId, duration, this.usage);
       let analysis = {};
       try {
         analysis = (await analyzeCall(this.config, this.lead, this.transcript, this.endReason)) ?? {};
@@ -377,6 +394,7 @@ export class CallBridge {
           business_name: analysis.business_name || null,
         },
         duration,
+        usage: this.usage,
       });
     } catch (err) {
       this.logError(err);

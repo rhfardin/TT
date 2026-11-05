@@ -131,7 +131,10 @@ app.use(['/api', '/tools'], express.json({ limit: '20mb' }), route(async (req, r
     ip: req.ip,
     headers: { cookie: req.get('cookie'), 'x-tool-secret': req.get('x-tool-secret'), 'x-requested-with': req.get('x-requested-with') },
   });
-  if (r.raw) return res.status(r.status).type(r.raw.contentType).send(Buffer.from(r.raw.body));
+  if (r.raw) {
+    if (r.raw.filename) res.attachment(r.raw.filename);
+    return res.status(r.status).type(r.raw.contentType).send(typeof r.raw.body === 'string' ? r.raw.body : Buffer.from(r.raw.body));
+  }
   res.set(r.headers || {}).status(r.status).json(r.json);
 }));
 

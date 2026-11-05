@@ -135,7 +135,11 @@ async function handle(request, env) {
         'x-requested-with': request.headers.get('x-requested-with') || '',
       },
     });
-    if (r.raw) return new Response(r.raw.body, { status: r.status, headers: { 'Content-Type': r.raw.contentType } });
+    if (r.raw) {
+      const headers = { 'Content-Type': r.raw.contentType };
+      if (r.raw.filename) headers['Content-Disposition'] = `attachment; filename="${r.raw.filename}"`;
+      return new Response(r.raw.body, { status: r.status, headers });
+    }
     return json(r.json, r.status, r.headers);
   }
 

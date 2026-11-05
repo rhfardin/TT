@@ -3,6 +3,7 @@
 import { checkLead, canCallNow, nextWindowStart, normalizePhone, leadTimezone, FINAL_STATUSES } from './leads.js';
 import { calcomReady, getSlots, book, spokenTime } from './calcom.js';
 import { hotReason, notifyOwner, scheduleFollowup } from './notify.js';
+import { estimateCostCents } from './costs.js';
 import { promptVariables, followUpMessage, OUTCOME_STATUS, OUTCOMES } from './agent.js';
 import { createStreamingCall, sendSms, hangUp, updateCall, transferTwiml, whisperTwiml, streamTwiml } from './twilio.js';
 import { hmacHex, safeEqual } from './crypto.js';
@@ -76,21 +77,30 @@ export async function placeCall(ctx, leadId, opts = {}) {
 
 const nowSql = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
 
-export async function recordCallResult(ctx, callId, { summary, transcript, outcome, collected = {}, duration }) {
-  const { store } = ctx;
+// usage: OpenAI token usage for the call (see costs.js); extraSeconds: the owner's leg of a live transfer.
+export async function recordCallResult(ctx, callId, { summary, transcript, outcome, collected = {}, duration, usage = null, extraSeconds = 0 }) {
+  const { store, config } = ctx;
   const call = await store.getCall(callId);
   if (!call) return;
   const lead = await store.getLead(call.lead_id);
   outcome = String(outcome ?? '').toLowerCase().trim();
+  const inbound = call.direction === 'inbound';
+  const talked = (transcript ?? []).some((t) => t.role === 'user');
+  usage ??= call.usage ? JSON.parse(call.usage) : {};
+  const costCents = config.voiceProvider === 'elevenlabs'
+    ? Math.round(Math.ceil((Number(duration) || 0) / 60) * 10.4 * 100) / 100 // ~$0.09 ElevenLabs + Twilio per minute
+    : estimateCostCents({
+      model: config.openai.realtimeModel, usage, seconds: duration, answered: Number(duration) > 0, inbound,
+      amd: config.calling.amdEnabled, recorded: config.recordCalls, extraSeconds,
+    });
 
   await store.updateCall(callId, {
     status: 'completed', duration_secs: duration ?? null, summary: summary ?? null, ended_at: nowSql(),
     transcript: JSON.stringify(transcript ?? []), outcome: JSON.stringify({ outcome, ...collected }),
+    talked: talked ? 1 : 0, usage: JSON.stringify(usage), cost_cents: costCents,
   });
 
   const fields = { last_summary: summary ?? null };
-  const inbound = call.direction === 'inbound';
-  const talked = (transcript ?? []).some((t) => t.role === 'user');
   // A "do not call" set by a tool during the call wins over anything else. A caller who hung up
   // straight away doesn't change anything.
   if (lead.status !== 'dnc' && (talked || !inbound)) {
@@ -114,9 +124,9 @@ export async function recordCallResult(ctx, callId, { summary, transcript, outco
 
 export const isMachine = (answeredBy) => /^(machine|fax)/.test(String(answeredBy || ''));
 
-export const recordVoicemail = (ctx, callId, duration = null) => recordCallResult(ctx, callId, {
+export const recordVoicemail = (ctx, callId, duration = null, usage = null) => recordCallResult(ctx, callId, {
   summary: 'Reached voicemail or an answering machine; hung up without leaving a message.',
-  transcript: [], outcome: 'voicemail', duration,
+  transcript: [], outcome: 'voicemail', duration, usage,
 });
 
 // Businesses in the call list get called again later, at a different time of day each try.
@@ -138,7 +148,7 @@ export async function recordNotConnected(ctx, callId, reason, status = 'no_answe
   const { store } = ctx;
   const call = await store.getCall(callId);
   if (!call || call.status === 'completed') return;
-  await store.updateCall(callId, { status, error: String(reason), ended_at: nowSql() });
+  await store.updateCall(callId, { status, error: String(reason), ended_at: nowSql(), talked: 0, cost_cents: 0 });
   const lead = await store.getLead(call.lead_id);
   if (lead?.status === 'calling') await store.updateLead(lead.id, { status: 'no_answer' });
   await store.logEvent(call.lead_id, 'call_not_connected', reason);
@@ -271,6 +281,7 @@ export async function finalizeTransfer(ctx, callId, { talkSecs = null, duration 
       talk_secs: talkSecs,
     },
     duration,
+    extraSeconds: talkSecs || 0,
   });
 }
 
