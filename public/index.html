@@ -67,6 +67,10 @@
   .pill.warn { background: var(--warn-bg); color: var(--warn); }
   .pill.bad { background: var(--bad-bg); color: var(--bad); }
   .empty { text-align: center; padding: 50px 20px; }
+  .needs { border-color: var(--good); }
+  .need { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .need:first-child { border-top: 0; }
+  .need .what { flex: 1; min-width: 220px; }
   .empty h2 { margin: 0 0 6px; }
 
   #drawer { position: fixed; inset: 0 0 0 auto; width: min(560px, 100%); background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 20px; transform: translateX(100%); transition: transform .2s; z-index: 5; visibility: hidden; }
@@ -126,6 +130,11 @@
       <div class="card banner" id="setupBanner" hidden>
         <span><b>Almost ready.</b> <span id="setupText"></span></span>
         <button class="small primary" data-goto="settings">Open Settings</button>
+      </div>
+
+      <div class="card needs" id="needsYou" hidden>
+        <h2 style="margin:0 0 6px;font-size:17px">Needs you <span class="pill good" id="needsCount"></span></h2>
+        <div id="needsList"></div>
       </div>
 
       <div class="stats" id="stats"></div>
@@ -317,6 +326,20 @@
           <div class="help" style="margin-top:8px">Or do it by hand: Twilio → Phone Numbers → your number → "A call comes in" → Webhook, POST: <code id="inboundUrl"></code></div>
         </div>
 
+        <div class="card">
+          <h2>10. Alerts and follow-up</h2>
+          <p class="muted" style="margin:0">You get an email the moment a business is interested, says yes, books a call, asks for a call back, talks to you on a transfer, or calls you back. They also appear under <b>Needs you</b> on the Businesses page until you click Done.</p>
+          <div class="grid">
+            <div><label>Send alerts to</label><input name="ALERT_EMAIL" type="email" placeholder="hello@rhfardin.com">
+              <div class="help">Empty: the "Send from" address under Follow-up email</div></div>
+            <div><label>Follow-up email to businesses</label>
+              <select name="FOLLOWUP_DAYS"><option value="0">Off</option><option value="2">2 days after the preview</option><option value="3">3 days after</option><option value="5">5 days after</option><option value="7">7 days after</option></select>
+              <div class="help">One short reminder with the preview link, only if they haven't said yes or no and you haven't clicked Done.</div></div>
+            <div class="full"><label>Business postal address</label><input name="BUSINESS_ADDRESS" placeholder="Rizer Web, street address, city, state ZIP">
+              <div class="help">Required for follow-up emails: US law (CAN-SPAM) needs a real postal address in marketing emails.</div></div>
+          </div>
+        </div>
+
         <div class="savebar"><button class="primary">Save settings</button><span id="saveResult" class="muted"></span></div>
       </form>
     </section>
@@ -366,7 +389,10 @@ function toast(msg) {
 const pill = (s) => { const [label, cls] = STATUS[s] || [s, '']; return `<span class="pill ${cls}">${esc(label)}</span>`; };
 const when = (iso) => {
   const d = new Date(iso);
-  return d - Date.now() < 60000 ? 'soon' : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  const ms = d - Date.now();
+  if (Math.abs(ms) < 60000) return ms > 0 ? 'soon' : 'just now';
+  if (ms < 0 && ms > -864e5) return -ms < 3600e3 ? `${Math.round(-ms / 60000)} min ago` : `${Math.round(-ms / 3600e3)}h ago`;
+  return d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
 };
 // Shown in the list: a lead waiting in the queue says when it will be called.
 const leadPill = (l) => (l.next_call_at && l.status !== 'calling'
@@ -394,6 +420,30 @@ document.addEventListener('click', (e) => {
 });
 
 // ---------- Businesses ----------
+async function loadNeedsYou() {
+  const { leads: hot } = await api('/api/needs-you');
+  $('#needsYou').hidden = !hot.length;
+  $('#needsCount').textContent = hot.length;
+  $('#needsList').innerHTML = hot.map((l) => `
+    <div class="need">
+      <div class="what"><b>${esc(l.business_name)}</b> · <span class="pill good">${esc(l.hot_reason)}</span>
+        <span class="muted">${esc(when(l.hot_at))}</span>
+        <div class="sub muted">${esc(l.phone)}${l.meeting_time ? ` · Follow up: ${esc(l.meeting_time)}` : ''}</div>
+        <div class="summary muted">${esc(l.last_summary || '')}</div></div>
+      <button class="small" data-open="${Number(l.id)}">Open</button>
+      <button class="small primary" data-done="${Number(l.id)}">Done</button>
+    </div>`).join('');
+}
+$('#needsList').onclick = async (e) => {
+  const open = e.target.closest('[data-open]');
+  if (open) return openLead(Number(open.dataset.open));
+  const done = e.target.closest('[data-done]');
+  if (done) {
+    await api(`/api/leads/${done.dataset.done}/handled`, { method: 'POST', body: '{}' });
+    loadNeedsYou();
+  }
+};
+
 async function loadStatus() {
   const s = await api('/api/status');
   const n = Object.fromEntries(s.counts.map((r) => [r.status, r.n]));
@@ -622,7 +672,7 @@ $('#days').innerHTML = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const DEFAULTS = { OPENAI_REALTIME_MODEL: 'gpt-realtime-mini', OPENAI_VOICE: 'marin', CALL_WINDOW_START: '9', CALL_WINDOW_END: '17',
   CALL_DAYS: '1,2,3,4,5', DEFAULT_TIMEZONE: 'America/New_York', DEFAULT_COUNTRY_CODE: '1', CALL_SPACING_SECONDS: '90', MAX_ATTEMPTS: '3', AGENT_NAME: 'Alex',
   AMD_ENABLED: 'true', MAX_CALL_SECONDS: '420', RETRY_NO_ANSWER_HOURS: '24', RETRY_VOICEMAIL_HOURS: '48', RECORD_CALLS: 'false',
-  TRANSFER_ENABLED: 'false' };
+  TRANSFER_ENABLED: 'false', FOLLOWUP_DAYS: '0' };
 
 let loadedSettings = {};
 async function loadSettings() {
@@ -690,8 +740,14 @@ $('#testCall').onclick = async () => {
 };
 
 // ---------- Start ----------
-function refresh() { return Promise.all([loadStatus(), loadLeads()]).catch(() => {}); }
-async function start() { $('#login').hidden = true; $('#app').hidden = false; await refresh(); }
+function refresh() { return Promise.all([loadStatus(), loadLeads(), loadNeedsYou()]).catch(() => {}); }
+async function start() {
+  $('#login').hidden = true; $('#app').hidden = false;
+  await refresh();
+  // Links in alert emails: /#lead-12 opens that business.
+  const m = location.hash.match(/^#lead-(\d+)$/);
+  if (m) openLead(Number(m[1]));
+}
 api('/api/status').then(start).catch(() => showLogin());
 setInterval(() => { if (!$('#app').hidden && !$('#tab-leads').hidden) refresh(); }, 8000);
 </script>

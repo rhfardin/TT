@@ -102,6 +102,17 @@ export const MIGRATIONS = [
     version: 6,
     statements: ["ALTER TABLE calls ADD COLUMN direction TEXT NOT NULL DEFAULT 'outbound'"],
   },
+  {
+    // Hot leads waiting for the owner, and the optional follow-up email.
+    version: 7,
+    statements: [
+      'ALTER TABLE leads ADD COLUMN hot_at TEXT',
+      'ALTER TABLE leads ADD COLUMN hot_reason TEXT',
+      'ALTER TABLE leads ADD COLUMN handled_at TEXT',
+      'ALTER TABLE leads ADD COLUMN followup_due_at TEXT',
+      'ALTER TABLE leads ADD COLUMN followup_sent_at TEXT',
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).version;

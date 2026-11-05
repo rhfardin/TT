@@ -4,7 +4,8 @@
 import { UPSERT_LEAD_SQL, upsertArgs, FINAL_STATUSES } from './leads.js';
 
 const LEAD_COLUMNS = new Set(['business_name', 'contact_name', 'phone', 'email', 'website', 'demo_link', 'category',
-  'city', 'timezone', 'notes', 'status', 'attempts', 'last_called_at', 'last_summary', 'meeting_time', 'is_test', 'in_campaign']);
+  'city', 'timezone', 'notes', 'status', 'attempts', 'last_called_at', 'last_summary', 'meeting_time', 'is_test', 'in_campaign',
+  'hot_at', 'hot_reason', 'handled_at', 'followup_due_at', 'followup_sent_at']);
 const CALL_COLUMNS = new Set(['conversation_id', 'call_sid', 'status', 'error', 'duration_secs', 'summary',
   'transcript', 'outcome', 'ended_at', 'answered_by', 'recording_sid', 'transfer_state', 'transfer_summary']);
 
@@ -61,6 +62,13 @@ export function createStore(db) {
       const f = leadFilter(filter);
       return (await db.get(`SELECT COUNT(*) AS n FROM leads WHERE ${f.sql}`, ...f.args)).n;
     },
+    // Hot leads the owner hasn't dealt with yet, newest first.
+    needsYou: () => db.all(`SELECT * FROM leads WHERE is_test = 0 AND hot_at IS NOT NULL
+                            AND (handled_at IS NULL OR handled_at < hot_at) ORDER BY hot_at DESC LIMIT 100`),
+    countNeedsYou: async () => (await db.get(`SELECT COUNT(*) AS n FROM leads WHERE is_test = 0 AND hot_at IS NOT NULL
+                                              AND (handled_at IS NULL OR handled_at < hot_at)`)).n,
+    dueFollowups: (nowIso, limit = 10) => db.all(`SELECT * FROM leads WHERE followup_due_at <= ? AND followup_sent_at IS NULL
+                                                   AND is_test = 0 ORDER BY followup_due_at LIMIT ?`, nowIso, limit),
     statusCounts: () => db.all('SELECT status, COUNT(*) AS n FROM leads WHERE is_test = 0 GROUP BY status'),
     markInCampaign: (list) => db.run('UPDATE leads SET in_campaign = 1 WHERE id IN (SELECT value FROM json_each(?))', ids(list)),
 

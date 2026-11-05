@@ -21,6 +21,7 @@ export async function startApp(env = {}) {
     failUpdates: false,
     numberUpdates: [], // changes to the Twilio number's settings (incoming call URL)
     calcom: { slots: [], bookings: [], requests: [], fail: null }, // fake Cal.com calendar
+    emails: [], // sent through the fake Resend
     lastTwiml: null, // what our server answered to the last signed Twilio webhook
   };
 
@@ -74,6 +75,10 @@ export async function startApp(env = {}) {
         return new Response('{}');
       }
       return new Response('{}');
+    }
+    if (url === 'https://api.resend.com/emails') {
+      fake.emails.push(JSON.parse(opts.body));
+      return new Response(JSON.stringify({ id: `em${fake.emails.length}` }));
     }
     if (url.startsWith('https://api.cal.com/v2/')) {
       fake.calcom.requests.push({ url, headers: opts.headers, body: opts.body && JSON.parse(opts.body) });

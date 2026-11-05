@@ -7,6 +7,7 @@ import { migrate } from '../src/core/schema.js';
 import { createStore } from '../src/core/store.js';
 import { handleRequest } from '../src/core/api.js';
 import { runDue } from '../src/core/queue.js';
+import { sendDueFollowups } from '../src/core/notify.js';
 import {
   handleTwilioStatus, handleTwilioAmd, handleTwilioRecording, handleTwilioWhisper, handleTwilioWhisperAnswer,
   handleTwilioTransferResult, handleTwilioInbound, verifyElevenLabsSignature, handleElevenLabsWebhook,
@@ -71,6 +72,7 @@ export default {
     const ctx = await makeCtx(env, '');
     await ctx.store.releaseStuckCalls(new Date(Date.now() - 30 * 60 * 1000).toISOString());
     await ctx.store.purgeAuth();
+    await sendDueFollowups(ctx);
     await env.DIALER.get(env.DIALER.idFromName('main')).poke();
   },
 };

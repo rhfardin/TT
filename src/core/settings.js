@@ -41,6 +41,9 @@ export const SETTINGS = [
   { key: 'RECORD_CALLS' },
   { key: 'TRANSFER_ENABLED' },
   { key: 'TRANSFER_PHONE' },
+  { key: 'ALERT_EMAIL' },
+  { key: 'FOLLOWUP_DAYS' },
+  { key: 'BUSINESS_ADDRESS' },
   { key: 'CALCOM_API_KEY', secret: true },
   { key: 'CALCOM_USERNAME' },
   { key: 'CALCOM_EVENT_SLUG' },
@@ -72,6 +75,8 @@ const VALIDATE = {
   AMD_ENABLED: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
   RECORD_CALLS: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
   TRANSFER_ENABLED: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
+  ALERT_EMAIL: (v) => (/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(v) ? null : 'must be an email address'),
+  FOLLOWUP_DAYS: int(0, 30),
   CALCOM_USERNAME: (v) => (/^[\w.-]+$/.test(v) ? null : 'is the part after cal.com/ in your booking link'),
   CALCOM_EVENT_SLUG: (v) => (/^[\w.-]+$/.test(v) ? null : 'is the last part of your event link, like 15min'),
   TRANSFER_PHONE: (v) => (/^\+\d{8,15}$/.test(v) ? null : 'must look like +15551234567'),
@@ -84,6 +89,7 @@ const LABELS = {
   RETRY_VOICEMAIL_HOURS: 'Retry after voicemail', AMD_ENABLED: 'Voicemail detection', RECORD_CALLS: 'Record calls',
   TRANSFER_ENABLED: 'Live transfer', TRANSFER_PHONE: 'Your phone for transfers',
   CALCOM_USERNAME: 'Cal.com username', CALCOM_EVENT_SLUG: 'Cal.com event',
+  ALERT_EMAIL: 'Alert email', FOLLOWUP_DAYS: 'Follow-up email',
 };
 
 // Blank secret fields mean "keep the current one"; blank normal fields mean "use the default".
@@ -105,5 +111,9 @@ export function cleanSettingsUpdate(body, current = {}) {
   if (start >= end) errors.push('Start hour must be before end hour');
   const transferOn = (values.TRANSFER_ENABLED ?? current.TRANSFER_ENABLED) === 'true';
   if (transferOn && !(values.TRANSFER_PHONE ?? current.TRANSFER_PHONE)) errors.push('Add your phone number to turn on live transfer');
+  const followupOn = Number(values.FOLLOWUP_DAYS ?? current.FOLLOWUP_DAYS ?? 0) > 0;
+  if (followupOn && !(values.BUSINESS_ADDRESS ?? current.BUSINESS_ADDRESS)) {
+    errors.push('Add your business postal address to turn on follow-up emails (US law requires it in marketing emails)');
+  }
   return { values, errors };
 }

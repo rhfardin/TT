@@ -2,6 +2,7 @@
 // ctx = { config, store, sendEmail?(to, subject, text) }
 import { checkLead, canCallNow, nextWindowStart, normalizePhone, leadTimezone, FINAL_STATUSES } from './leads.js';
 import { calcomReady, getSlots, book, spokenTime } from './calcom.js';
+import { hotReason, notifyOwner, scheduleFollowup } from './notify.js';
 import { promptVariables, followUpMessage, OUTCOME_STATUS, OUTCOMES } from './agent.js';
 import { createStreamingCall, sendSms, hangUp, updateCall, transferTwiml, whisperTwiml, streamTwiml } from './twilio.js';
 import { hmacHex, safeEqual } from './crypto.js';
@@ -97,6 +98,8 @@ export async function recordCallResult(ctx, callId, { summary, transcript, outco
   if (collected.decision_maker_name && !lead.contact_name) fields.contact_name = String(collected.decision_maker_name);
   await store.updateLead(lead.id, fields);
   await store.logEvent(lead.id, 'call_completed', { outcome, duration, direction: call.direction });
+  const reason = hotReason({ status: fields.status, outcome, inbound, talked });
+  if (reason && !lead.is_test) await notifyOwner(ctx, { ...lead, ...fields }, { reason, summary, collected });
   if (inbound) {
     // They called us back: a retry call already waiting for them would be one call too many.
     if (talked) await store.dequeueLead(lead.id);
@@ -309,6 +312,7 @@ export async function sendDemoLink(ctx, { lead_id, email, contact_name, channel 
       await ctx.sendEmail(to, `Your new website preview - ${lead.business_name}`, text);
       sent.push(`email to ${to}`);
       if (email && email !== lead.email) await store.updateLead(lead.id, { email });
+      await scheduleFollowup(ctx, lead);
     } catch (err) {
       await store.logEvent(lead.id, 'email_failed', err.message);
     }

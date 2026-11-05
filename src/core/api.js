@@ -100,6 +100,7 @@ export async function handleRequest(ctx, req) {
         bookMeeting: `${config.publicUrl}/tools/book-meeting`,
       },
       counts: await store.statusCounts(),
+      needsYou: await store.countNeedsYou(),
     });
   }
 
@@ -142,6 +143,12 @@ export async function handleRequest(ctx, req) {
     } catch (err) {
       return ok({ error: err.message }, 400);
     }
+  }
+
+  if (method === 'GET' && path === '/api/needs-you') return ok({ leads: await store.needsYou() });
+  if (method === 'POST' && (m = path.match(/^\/api\/leads\/(\d+)\/handled$/))) {
+    await store.updateLead(Number(m[1]), { handled_at: new Date().toISOString() });
+    return ok({ ok: true });
   }
 
   if (method === 'GET' && path === '/api/leads') {

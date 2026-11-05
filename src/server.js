@@ -10,6 +10,7 @@ import { migrate } from './core/schema.js';
 import { createStore } from './core/store.js';
 import { handleRequest } from './core/api.js';
 import { runDue } from './core/queue.js';
+import { sendDueFollowups } from './core/notify.js';
 import {
   handleTwilioStatus, handleTwilioAmd, handleTwilioRecording, handleTwilioWhisper, handleTwilioWhisperAnswer,
   handleTwilioTransferResult, handleTwilioInbound, verifyElevenLabsSignature, handleElevenLabsWebhook,
@@ -83,6 +84,7 @@ scheduleQueue(2000);
 setInterval(() => {
   store.releaseStuckCalls(new Date(Date.now() - 30 * 60 * 1000).toISOString()).catch((err) => console.error(err));
   store.purgeAuth().catch((err) => console.error(err));
+  makeCtx().then(sendDueFollowups).catch((err) => console.error(err));
 }, 5 * 60 * 1000).unref();
 
 // ---- HTTP ----

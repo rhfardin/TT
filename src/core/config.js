@@ -36,6 +36,13 @@ export function buildConfig(e) {
       phone: env('TRANSFER_PHONE'),
     },
 
+    // Alerts to the owner about hot leads, and the optional follow-up email to businesses.
+    alerts: {
+      email: env('ALERT_EMAIL'),
+      followupDays: Number(env('FOLLOWUP_DAYS', '0')), // 0 = off
+      businessAddress: env('BUSINESS_ADDRESS'), // US law (CAN-SPAM) needs a postal address in follow-up emails
+    },
+
     // Cal.com: the AI offers open times and books calls with the owner during the call.
     calcom: {
       apiKey: env('CALCOM_API_KEY'),
