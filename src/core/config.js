@@ -98,6 +98,8 @@ export function buildConfig(e) {
       spacingSeconds: num('CALL_SPACING_SECONDS', 90, 0, 3600),
       maxAttempts: num('MAX_ATTEMPTS', 3, 1, 10),
       maxCallSeconds: num('MAX_CALL_SECONDS', 420, 60, 1800),
+      // Dead air: nobody says anything for this long → the AI says goodbye and hangs up (0 = off).
+      silenceSeconds: num('SILENCE_SECONDS', 20, 0, 120),
       // Calls per 24 hours from one number. A steady, modest pace keeps it from being marked "Spam Likely".
       maxCallsPerDay: num('MAX_CALLS_PER_DAY', 80, 1, 1000),
       // Twilio answering machine detection: hang up on voicemail within a few seconds.

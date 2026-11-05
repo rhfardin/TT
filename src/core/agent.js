@@ -54,7 +54,13 @@ export function promptVariables(lead, seller) {
 //   he didn't pick up; history holds the conversation so far, so the AI can pick it back up).
 // inbound: 'known' (a business from the list calling back) or 'unknown' (a number we don't have).
 // booking: Cal.com is set up, so the AI books calls with the owner instead of vaguely promising one.
-export function renderPrompt(template, lead, seller, { recording = false, transfer = 'unavailable', history = [], inbound = null, booking = false } = {}) {
+// callbacks: the AI can book a time for us to call back (schedule_callback); localNow is their current time.
+// menus: an outbound call that may hit a phone menu (press_keys); keysPressed: we just pressed these
+//   digits and the call is picking back up (history holds the conversation so far).
+export function renderPrompt(template, lead, seller, {
+  recording = false, transfer = 'unavailable', history = [], inbound = null, booking = false,
+  callbacks = false, localNow = '', menus = false, keysPressed = null,
+} = {}) {
   const vars = promptVariables(lead, seller);
   const name = seller.yourName || 'the owner';
   // Always first, whatever the edited script says: the AI is honest about being an AI.
@@ -96,6 +102,26 @@ export function renderPrompt(template, lead, seller, { recording = false, transf
       'or email the preview. Keep it short. Don\'t introduce yourself again.' +
       (lines ? `\n\nThe conversation so far:\n${lines}` : '');
   }
+  if (callbacks) {
+    extra += `\n\n# Calling back at a time they pick\nRight now it is ${localNow} for them. If they (or whoever answers, like a ` +
+      'receptionist) tell you a better time to call ("try tomorrow after 2", "he\'s in Thursday morning"), agree and call ' +
+      'schedule_callback with that day and time as YYYY-MM-DD HH:MM, 24-hour clock, their local time ("morning" = 10:00, ' +
+      '"afternoon" = 14:00, "after lunch" = 13:30). Then confirm it back in a few words ("Perfect, I\'ll call Thursday at 10"). ' +
+      'If it says the time won\'t work, suggest the closest time that does.';
+  }
+  if (menus) {
+    extra += '\n\n# Phone menus\nIf a recording answers with options ("press 1 for appointments..."), don\'t talk over it: ' +
+      'pick the option most likely to reach the front desk, office manager or owner (often "all other questions" or 0) ' +
+      'and call press_keys with that digit, saying nothing. Never pick options that leave a message, book an appointment, ' +
+      'pay a bill, or reach an emergency line. If no option fits, wait for the menu to finish or press 0. ' +
+      'If it\'s a dead end after a couple of tries, call end_call.';
+  }
+  if (keysPressed) {
+    const lines = history.slice(-20).map((t) => `${t.role === 'agent' ? 'You' : 'Them'}: ${t.message}`).join('\n');
+    extra += `\n\n# Back from the phone menu\nYou just pressed ${keysPressed} in their phone menu. Now listen: you may hear more ` +
+      'options (use press_keys again), hold music or silence (say nothing), or a person. When a person answers, start your ' +
+      'normal opening as if they just picked up.' + (lines ? `\n\nWhat was said so far:\n${lines}` : '');
+  }
   if (booking) {
     extra += `\n\n# Booking a call with ${name}\nWhen they want to talk it through, need to think, or ask questions only ${name} can answer, ` +
       `book a quick call with him instead of promising one. Call check_availability, then offer two or three of the times it gives, ` +
@@ -135,7 +161,7 @@ export const REALTIME_TOOLS = [
   {
     type: 'function',
     name: 'end_call',
-    description: 'Hang up. Use after saying goodbye, or immediately on voicemail, phone menus or wrong numbers.',
+    description: 'Hang up. Use after saying goodbye, or immediately on voicemail or wrong numbers.',
     parameters: {
       type: 'object',
       properties: { reason: { type: 'string', enum: ['finished', 'voicemail', 'wrong_number', 'not_interested', 'other'] } },
@@ -180,8 +206,34 @@ export const BOOKING_TOOLS = [
   },
 ];
 
-export const realtimeTools = ({ transfer = false, booking = false } = {}) =>
-  [...REALTIME_TOOLS, ...(transfer ? [TRANSFER_TOOL] : []), ...(booking ? BOOKING_TOOLS : [])];
+export const CALLBACK_TOOL = {
+  type: 'function',
+  name: 'schedule_callback',
+  description: 'Book a time for us to call this business back, when they or their receptionist name one.',
+  parameters: {
+    type: 'object',
+    properties: {
+      when: { type: 'string', description: 'Day and time on their clock, as YYYY-MM-DD HH:MM (24-hour).' },
+      note: { type: 'string', description: 'Who to ask for or anything to remember, e.g. "ask for Dr. Lee".' },
+    },
+    required: ['when'],
+  },
+};
+
+export const KEYS_TOOL = {
+  type: 'function',
+  name: 'press_keys',
+  description: 'Press keys in an automated phone menu, e.g. "1" or "0". Say nothing while doing it.',
+  parameters: {
+    type: 'object',
+    properties: { digits: { type: 'string', description: 'Keys to press: 0-9, * or #. Usually a single digit.' } },
+    required: ['digits'],
+  },
+};
+
+export const realtimeTools = ({ transfer = false, booking = false, callbacks = false, menus = false } = {}) =>
+  [...REALTIME_TOOLS, ...(transfer ? [TRANSFER_TOOL] : []), ...(booking ? BOOKING_TOOLS : []),
+    ...(callbacks ? [CALLBACK_TOOL] : []), ...(menus ? [KEYS_TOOL] : [])];
 
 // Maps the call outcome to a lead status.
 export const OUTCOME_STATUS = {

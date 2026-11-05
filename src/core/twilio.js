@@ -45,12 +45,15 @@ export const streamToken = (tw, callId) => hmacHex(tw.authToken, `stream:${callI
 const xmlAttr = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const xmlText = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
-// Connects the call's audio to our media stream. resume: reconnecting the AI after a missed transfer.
-export async function streamTwiml(config, callId, { resume = false } = {}) {
+// Connects the call's audio to our media stream. resume: reconnecting the AI, true after a missed
+// transfer, 'keys' after pressing digits in the business's phone menu (digits: what to press first).
+export async function streamTwiml(config, callId, { resume = false, digits = '' } = {}) {
   const wsUrl = `${config.publicUrl.replace(/^http/, 'ws')}/media-stream/${callId}`;
-  return `<Response><Connect><Stream url="${xmlAttr(wsUrl)}">` +
+  const mode = resume === 'keys' ? 'keys' : resume ? '1' : '';
+  return '<Response>' + (digits ? `<Play digits="${xmlAttr(digits)}"/>` : '') +
+    `<Connect><Stream url="${xmlAttr(wsUrl)}">` +
     `<Parameter name="callId" value="${callId}"/><Parameter name="token" value="${await streamToken(config.twilio, callId)}"/>` +
-    (resume ? '<Parameter name="resume" value="1"/>' : '') +
+    (mode ? `<Parameter name="resume" value="${mode}"/>` : '') +
     '</Stream></Connect></Response>';
 }
 

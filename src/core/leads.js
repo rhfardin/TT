@@ -179,6 +179,41 @@ function formatter(tz) {
 }
 export const isValidTimezone = (tz) => Boolean(tz) && formatter(tz) !== null;
 
+const dateFormatters = new Map();
+function dateParts(tz, date) {
+  let f = dateFormatters.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    dateFormatters.set(tz, f);
+  }
+  const p = Object.fromEntries(f.formatToParts(date).map((x) => [x.type, x.value]));
+  return { y: Number(p.year), m: Number(p.month), d: Number(p.day), h: Number(p.hour), min: Number(p.minute) };
+}
+
+// The business's local date, as YYYY-MM-DD.
+export function localDate(tz, now = new Date()) {
+  const p = dateParts(tz, now);
+  return `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;
+}
+
+// The moment when it's `ymd` (YYYY-MM-DD) at hour:minute on the clocks in `tz`.
+export function zonedDate(ymd, hour, minute, tz) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const wanted = Date.UTC(y, m - 1, d, hour, minute);
+  let guess = wanted;
+  for (let i = 0; i < 3; i++) {
+    const p = dateParts(tz, new Date(guess));
+    const diff = wanted - Date.UTC(p.y, p.m - 1, p.d, p.h, p.min);
+    if (!diff) break;
+    guess += diff;
+  }
+  return new Date(guess);
+}
+
+// "Thursday, November 5, 2026, 10:14 AM": what time it is for the business, for the AI.
+export const localNowText = (tz, now = new Date()) =>
+  new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(now);
+
 // Sheet value ("America/Chicago", "Central", "PST"), else the phone's area code, else the default.
 // Aliases come first: "EST" is also a real but fixed UTC-5 zone that ignores daylight saving time.
 export function leadTimezone(lead, calling) {
@@ -222,6 +257,11 @@ export function nextWindowStart(lead, calling, from = new Date()) {
     return at;
   }
   return new Date(from.getTime() + 24 * 3600 * 1000); // no calling days configured
+}
+
+// A day the owner said not to call (holidays), as YYYY-MM-DD on the business's calendar.
+export function noCallReason(calling, ymd) {
+  return (calling.noCallDates || []).includes(ymd) ? `${ymd} is a day off (no calls).` : null;
 }
 
 // Statuses that end a lead's calling for good.

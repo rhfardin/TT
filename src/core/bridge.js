@@ -10,8 +10,9 @@ import { renderPrompt, firstGreeting, realtimeTools } from './agent.js';
 import { streamToken, hangUp } from './twilio.js';
 import {
   sendDemoLink, markDoNotCall, recordCallResult, recordVoicemail, analyzeCall, isMachine, transferAvailable, startTransfer,
-  UNKNOWN_CALLER, checkAvailability, bookMeeting,
+  UNKNOWN_CALLER, checkAvailability, bookMeeting, scheduleCallback, pressKeys, collectedFrom,
 } from './actions.js';
+import { leadTimezone, localNowText } from './leads.js';
 import { calcomReady } from './calcom.js';
 import { addUsage } from './costs.js';
 import { safeEqual } from './crypto.js';
@@ -84,6 +85,7 @@ export class CallBridge {
           this.marks.splice(0, i + 1);
           if (msg.mark.name === 'hangup') await this.hangup();
           if (msg.mark.name === 'transfer') await this.doTransfer();
+          if (msg.mark.name === 'keys') await this.doPressKeys();
           return;
         }
         case 'stop': return this.io.closeTwilio();
@@ -101,10 +103,12 @@ export class CallBridge {
     try { expected = callId ? await streamToken(this.config.twilio, callId) : null; } catch { /* no Twilio auth token */ }
     const call = expected && safeEqual(p.token, expected) ? await this.ctx.store.getCall(callId) : null;
     // Only the call we just placed may connect, once: a replayed or stale stream is turned away.
-    // resume: the AI picks the call back up after a transfer the owner didn't take.
-    const resume = p.resume === '1';
-    const fresh = call && (resume ? call.status === 'transferring' && call.transfer_state === 'missed' : ['initiated', 'ringing'].includes(call.status)) &&
-      (!call.call_sid || call.call_sid === start.callSid);
+    // resume: the AI picks the call back up: '1' after a transfer the owner didn't take, 'keys' after
+    // pressing keys in the business's phone menu.
+    const resume = p.resume === '1' || p.resume === 'keys' ? p.resume : null;
+    const expectedStatus = resume === '1' ? call?.status === 'transferring' && call.transfer_state === 'missed'
+      : resume === 'keys' ? call?.status === 'pressing_keys' : ['initiated', 'ringing'].includes(call?.status);
+    const fresh = call && expectedStatus && (!call.call_sid || call.call_sid === start.callSid);
     const lead = fresh && (await this.ctx.store.getLead(call.lead_id));
     if (!lead) {
       console.warn('media stream rejected');
@@ -149,17 +153,22 @@ export class CallBridge {
     // Voicemail detection only exists on calls we place; someone calling us is a person.
     const guard = this.config.calling.amdEnabled && !this.resumed && !this.inbound;
     const inbound = this.inbound && !this.resumed ? (this.lead.business_name === UNKNOWN_CALLER ? 'unknown' : 'known') : null;
-    this.transferOk = !this.resumed && transferAvailable(this.config, this.lead);
-    const transfer = this.resumed ? 'missed' : this.transferOk ? 'available' : 'unavailable';
+    this.transferOk = this.resumed !== '1' && transferAvailable(this.config, this.lead);
+    const transfer = this.resumed === '1' ? 'missed' : this.transferOk ? 'available' : 'unavailable';
     const booking = calcomReady(this.config.calcom);
+    const callbacks = !String(this.lead.phone).startsWith('hidden:');
+    const menus = !this.inbound;
+    const keysPressed = this.resumed === 'keys' ? [...this.transcript].reverse().find((t) => t.keys)?.keys || 'a key' : null;
     this.sendOpenAI({
       type: 'session.update',
       session: {
         type: 'realtime',
         model: realtimeModel,
         output_modalities: ['audio'],
-        instructions: renderPrompt(this.template(), this.lead, this.config.seller,
-          { recording: this.config.recordCalls, transfer, history: this.transcript, inbound, booking }),
+        instructions: renderPrompt(this.template(), this.lead, this.config.seller, {
+          recording: this.config.recordCalls, transfer, history: this.transcript, inbound, booking,
+          callbacks, localNow: localNowText(leadTimezone(this.lead, this.config.calling)), menus, keysPressed,
+        }),
         audio: {
           input: {
             format: { type: 'audio/pcmu' },
@@ -169,7 +178,7 @@ export class CallBridge {
           },
           output: { format: { type: 'audio/pcmu' }, voice },
         },
-        tools: realtimeTools({ transfer: this.transferOk, booking }),
+        tools: realtimeTools({ transfer: this.transferOk, booking, callbacks, menus }),
         tool_choice: 'auto',
       },
     });
@@ -182,7 +191,9 @@ export class CallBridge {
         if (this.heardDuringGuard) this.sendOpenAI({ type: 'response.create' });
       });
     }
-    if (this.resumed || this.inbound) {
+    if (this.resumed === 'keys') {
+      // Back from a phone menu: listen first (more options, hold music or a person picking up).
+    } else if (this.resumed || this.inbound) {
       this.sendOpenAI({ type: 'response.create' }); // they're waiting: answer / apologize right away (see the prompt)
     } else {
       // People usually answer with "Hello?" first. If they stay silent, open the call ourselves.
@@ -198,6 +209,34 @@ export class CallBridge {
       instructions: 'The call is almost out of time. Briefly wrap up: confirm the next step, say a warm goodbye, then call end_call.',
     } }));
     this.later(Math.max(limitMs - 3000, 15000), () => this.hangup());
+    // Dead air: counted from after the opening on our calls, and with more patience while on hold.
+    const silenceMs = this.config.calling.silenceSeconds * 1000;
+    if (silenceMs > 0) {
+      this.lastActivity = Date.now() + (this.resumed || this.inbound ? 0 : 3500);
+      this.watchSilence(this.resumed === 'keys' ? silenceMs * 3 : silenceMs);
+    }
+  }
+
+  // Nobody has said anything (and the AI isn't talking) for limitMs: say goodbye and hang up.
+  // If they do answer, the call simply carries on.
+  watchSilence(limitMs) {
+    this.later(Math.min(2000, limitMs / 4), () => {
+      if (this.closed || this.finished || this.hangupRequested) return;
+      const busy = this.marks.length || this.userSpeaking || this.responding || this.guardActive || this.transferring || this.pressing;
+      if (busy) this.lastActivity = Math.max(this.lastActivity, Date.now());
+      else if (!this.silencePromptAt && Date.now() - this.lastActivity >= limitMs) {
+        const promptedAt = (this.silencePromptAt = Date.now());
+        this.endReason = 'silence';
+        this.sendOpenAI({ type: 'response.create', response: { instructions: 'Nobody has said anything for a while; the line may be dead. ' +
+          'Say only: "Hello? ... Seems like I lost you. I\'ll try you another time. Bye!", then call end_call with reason "other".' } });
+        this.later(Math.min(15000, Math.max(3000, limitMs)), () => {
+          if ((this.lastUserAt || 0) < promptedAt) return this.hangup();
+          this.silencePromptAt = null; // they answered: carry on
+          if (this.endReason === 'silence') this.endReason = null;
+        });
+      }
+      this.watchSilence(limitMs);
+    });
   }
 
   // The script for this call: the version picked when it was placed (A or B), edited in the dashboard,
@@ -239,17 +278,31 @@ export class CallBridge {
         break;
       case 'input_audio_buffer.speech_started':
         this.userSpoke = true;
+        this.userSpeaking = true;
+        this.lastUserAt = Date.now();
         clearTimeout(this.greetTimer);
         this.interrupt();
         break;
+      case 'input_audio_buffer.speech_stopped':
+        this.userSpeaking = false;
+        this.lastActivity = Date.now();
+        break;
       case 'conversation.item.input_audio_transcription.completed':
-        if (ev.transcript?.trim()) this.addLine('user', ev.transcript);
+        if (ev.transcript?.trim()) {
+          this.addLine('user', ev.transcript);
+          this.lastUserAt = this.lastActivity = Date.now();
+        }
+        break;
+      case 'response.created':
+        this.responding = true;
         break;
       case 'response.output_audio_transcript.done':
       case 'response.audio_transcript.done':
         if (ev.transcript?.trim()) this.addLine('agent', ev.transcript);
         break;
       case 'response.done':
+        this.responding = false;
+        this.lastActivity = Date.now();
         this.usage = addUsage(this.usage, ev.response?.usage);
         this.handleFunctionCalls(ev.response?.output ?? []).catch((err) => this.logError(err));
         break;
@@ -260,8 +313,8 @@ export class CallBridge {
   }
 
   // Adds a line and saves the transcript shortly after, so the dashboard can show the call live.
-  addLine(role, text) {
-    this.transcript.push({ role, message: text.trim(), t: this.elapsed() });
+  addLine(role, text, extra = {}) {
+    this.transcript.push({ role, message: text.trim(), t: this.elapsed(), ...extra });
     if (this.saveTimer) return;
     this.saveTimer = this.later(1500, () => {
       this.saveTimer = null;
@@ -288,7 +341,7 @@ export class CallBridge {
 
   // The caller started talking over the agent: stop playback and tell the model how much they heard.
   interrupt() {
-    const playing = this.marks.some((m) => m !== 'hangup' && m !== 'transfer');
+    const playing = this.marks.some((m) => m !== 'hangup' && m !== 'transfer' && m !== 'keys');
     if (!playing || !this.item) return;
     const heardMs = Math.round(Math.min(Math.max(this.latestMediaTs - this.item.startTs, 0), this.item.sentMs));
     if (this.item.id) {
@@ -318,6 +371,21 @@ export class CallBridge {
           result = await checkAvailability(this.ctx, { ...pick(args, ['day']), lead_id: this.lead.id });
         } else if (fc.name === 'book_meeting') {
           result = await bookMeeting(this.ctx, { ...pick(args, ['start', 'name', 'email']), lead_id: this.lead.id });
+        } else if (fc.name === 'schedule_callback') {
+          result = await scheduleCallback(this.ctx, { ...pick(args, ['when', 'note']), lead_id: this.lead.id });
+        } else if (fc.name === 'press_keys') {
+          const digits = String(args.digits ?? '').replace(/[\s,-]/g, '');
+          const pressedBefore = this.transcript.filter((t) => t.keys).length;
+          if (this.inbound || !/^[0-9*#]{1,10}$/.test(digits)) result = { ok: false, message: 'Keys must be 0-9, * or #.' };
+          else if (pressedBefore >= 6) result = { ok: false, message: 'Too many menu presses on this call. If you can\'t reach a person, call end_call.' };
+          else if (this.pressing || this.transferring) result = { ok: false, message: 'Already busy. Say nothing.' };
+          else {
+            // Pressed once anything the AI is still saying has played; no reply until the call reconnects.
+            this.pressing = { callId: fc.call_id, digits };
+            this.sendMark('keys');
+            this.later(Math.max(0, this.playbackEnd - this.latestMediaTs) + 1500, () => this.doPressKeys());
+            continue;
+          }
         } else if (fc.name === 'transfer_to_fardin') {
           if (this.transferring) {
             // Asked twice while already connecting: answer quietly, no new reply.
@@ -370,13 +438,30 @@ export class CallBridge {
     this.sendOpenAI({ type: 'response.create' });
   }
 
+  async doPressKeys() {
+    const k = this.pressing;
+    if (!k || k.started || this.closed) return;
+    k.started = true;
+    this.addLine('agent', `(pressed ${k.digits} in their phone menu)`, { keys: k.digits });
+    this.endReason = 'keys'; // the stream closes as the call leaves it; finish() waits for this
+    k.promise = pressKeys(this.ctx, this.callId, { callSid: this.callSid, digits: k.digits, transcript: this.transcript, usage: this.usage })
+      .catch((err) => ({ ok: false, message: err.message }));
+    const r = await k.promise;
+    if (r.ok) return;
+    this.transcript.pop();
+    this.endReason = null;
+    this.pressing = null;
+    this.sendOpenAI({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: k.callId, output: JSON.stringify(r) } });
+    this.sendOpenAI({ type: 'response.create' });
+  }
+
   elapsed() {
     return Math.round((Date.now() - this.startedAt) / 1000);
   }
 
   async hangup() {
     // Never hang up a call that's being handed to the owner.
-    if (this.hangupRequested || !this.callSid || this.finished || this.transferring?.started) return;
+    if (this.hangupRequested || !this.callSid || this.finished || this.transferring?.started || this.pressing?.started) return;
     this.hangupRequested = true;
     try {
       await hangUp(this.config.twilio, this.callSid);
@@ -401,6 +486,14 @@ export class CallBridge {
         return;
       }
     }
+    if (this.pressing?.promise) {
+      // The call continues on a new stream after the key press (that stream saves the result).
+      const r = await this.pressing.promise;
+      if (r.ok) {
+        await this.ctx.store.updateCall(this.callId, { usage: JSON.stringify(this.usage), transcript: JSON.stringify(this.transcript) }).catch(() => {});
+        return;
+      }
+    }
     if (this.finished) return;
     this.finished = true;
     try {
@@ -419,14 +512,7 @@ export class CallBridge {
         summary: analysis.summary ?? null,
         transcript: this.transcript,
         outcome: analysis.outcome ?? (this.endReason === 'voicemail' ? 'voicemail' : null),
-        collected: {
-          meeting_time: analysis.meeting_time || null,
-          email: analysis.email || null,
-          decision_maker_name: analysis.decision_maker_name || null,
-          next_step: analysis.next_step || null,
-          requests: analysis.requests || null,
-          business_name: analysis.business_name || null,
-        },
+        collected: collectedFrom(analysis),
         duration,
         usage: this.usage,
       });

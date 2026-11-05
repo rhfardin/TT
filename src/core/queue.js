@@ -56,7 +56,9 @@ export async function runDue(ctx, now = new Date()) {
       await store.rescheduleQueueItem(item.id, new Date(now.getTime() + 2 * 60 * 1000).toISOString());
       continue;
     }
-    const check = checkLead(lead, config.calling, { ignoreWindow: Boolean(item.ignore_window), now });
+    // They asked us to call back at this time: the max-tries limit doesn't apply.
+    const callback = item.reason === 'callback requested';
+    const check = checkLead(lead && callback ? { ...lead, attempts: 0 } : lead, config.calling, { ignoreWindow: Boolean(item.ignore_window), now });
     if (!check.ok) {
       if (lead && checkLead(lead, config.calling, { ignoreWindow: true }).ok) {
         // Only the hours are wrong: wait for the business's next calling window.
@@ -67,7 +69,7 @@ export async function runDue(ctx, now = new Date()) {
       }
       continue;
     }
-    const r = await placeCall(ctx, lead.id, { ignoreWindow: true, campaignId: item.campaign_id });
+    const r = await placeCall(ctx, lead.id, { ignoreWindow: true, campaignId: item.campaign_id, resetTries: callback });
     if (r.limited) {
       // A limit was reached meanwhile: keep their place in the queue and wait.
       await store.rescheduleQueueItem(item.id, now.toISOString());

@@ -1,6 +1,8 @@
 // Everything that happens around a call, shared by the Node server and the Cloudflare Worker.
 // ctx = { config, store, sendEmail?(to, subject, text) }
-import { checkLead, canCallNow, nextWindowStart, normalizePhone, leadTimezone, FINAL_STATUSES } from './leads.js';
+import {
+  checkLead, canCallNow, nextWindowStart, normalizePhone, leadTimezone, FINAL_STATUSES, zonedDate, localNowText, localTimeInfo, noCallReason,
+} from './leads.js';
 import { calcomReady, getSlots, book, spokenTime } from './calcom.js';
 import { hotReason, notifyOwner, scheduleFollowup } from './notify.js';
 import { estimateCostCents } from './costs.js';
@@ -123,7 +125,9 @@ export async function recordCallResult(ctx, callId, { summary, transcript, outco
     if (!keep) fields.status = next;
   }
   if (collected.business_name && lead.business_name === UNKNOWN_CALLER) fields.business_name = String(collected.business_name).slice(0, 200);
-  if (collected.meeting_time) fields.meeting_time = String(collected.meeting_time);
+  // A call-back time the AI booked during the call is more exact than the summary's version.
+  const callbackSet = await store.callbackSetSince(lead.id, call.created_at);
+  if (collected.meeting_time && !callbackSet) fields.meeting_time = String(collected.meeting_time);
   if (collected.email && !lead.email) fields.email = String(collected.email);
   if (collected.decision_maker_name && !lead.contact_name) fields.contact_name = String(collected.decision_maker_name);
   await store.updateLead(lead.id, fields);
@@ -132,9 +136,86 @@ export async function recordCallResult(ctx, callId, { summary, transcript, outco
   if (reason && !lead.is_test) await notifyOwner(ctx, { ...lead, ...fields }, { reason, summary, collected });
   const unreached = fields.status === 'no_answer' || fields.status === 'voicemail';
   // Reached (on any call, theirs or ours): a retry call already waiting for them would be one too many.
-  if (talked || (!inbound && !unreached)) await store.dequeueLead(lead.id);
+  if (talked || (!inbound && !unreached)) await store.dequeueLead(lead.id, call.created_at);
   else if (!inbound && unreached) await scheduleRetry(ctx, lead.id, fields.status);
+  // They gave a time to call back but the AI didn't book it during the call: book it now.
+  if (collected.callback_at && fields.status !== 'dnc' && !callbackSet && !lead.is_test) {
+    const r = await scheduleCallback(ctx, { lead_id: lead.id, when: collected.callback_at, note: 'from the call summary' });
+    if (!r.ok) await store.logEvent(lead.id, 'callback_not_set', `${collected.callback_at}: ${r.message}`);
+  }
 }
+
+// ---- Calling back at a time the business picks ----
+
+const DAY_NAMES = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+// when: "YYYY-MM-DD HH:MM" on the business's clock. Allowed 8 am to 8 pm their time on a calling day,
+// up to 60 days ahead. The queue then calls at exactly that time.
+export async function scheduleCallback(ctx, { lead_id, when, note = '' }, now = new Date()) {
+  const { store, config } = ctx;
+  const lead = await store.getLead(lead_id);
+  if (!lead) return { ok: false, message: 'lead not found' };
+  if (String(lead.phone).startsWith('hidden:')) return { ok: false, message: 'Their number is hidden, so we can\'t call them back. Ask for their number and say the owner will call.' };
+  const m = String(when || '').trim().match(/^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2})$/);
+  if (!m) return { ok: false, message: 'Give the time as YYYY-MM-DD HH:MM (24-hour clock, their local time).' };
+  const [hour, minute] = [Number(m[2]), Number(m[3])];
+  const tz = leadTimezone(lead, config.calling);
+  const at = zonedDate(m[1], hour, minute, tz);
+  if (!Number.isFinite(at.getTime()) || minute > 59) return { ok: false, message: 'That isn\'t a real date and time.' };
+  if (at.getTime() < now.getTime() + 5 * 60 * 1000) return { ok: false, message: `That time has passed. It's ${localNowText(tz, now)} for them.` };
+  if (at.getTime() > now.getTime() + 60 * 864e5) return { ok: false, message: 'That\'s too far ahead. Offer a time in the next few weeks.' };
+  if (hour < 8 || hour >= 20) return { ok: false, message: 'Callbacks are only between 8 am and 8 pm their time. Suggest a time in that range.' };
+  const day = localTimeInfo(tz, at).day;
+  if (!config.calling.days.includes(day)) {
+    return { ok: false, message: `There are no calls on ${DAY_NAMES[day]}s. Suggest ${config.calling.days.map((d) => DAY_NAMES[d]).join(', ')}.` };
+  }
+  const blocked = noCallReason(config.calling, m[1]);
+  if (blocked) return { ok: false, message: `${blocked} Suggest another day.` };
+  await store.scheduleCallback(lead.id, at.toISOString());
+  const spoken = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(at);
+  await store.updateLead(lead.id, { meeting_time: `Call back ${spoken} (their time)${note ? ` · ${String(note).slice(0, 200)}` : ''}` });
+  await store.logEvent(lead.id, 'callback_scheduled', `${at.toISOString()}${note ? ` ${note}` : ''}`);
+  await ctx.queue?.poke?.();
+  return { ok: true, message: `Done: we'll call back ${spoken}, their time. Confirm it back to them briefly.` };
+}
+
+// ---- Pressing keys in a phone menu (OpenAI provider) ----
+
+// Twilio media streams can't send key presses, so the call briefly leaves the stream: Twilio plays the
+// digits, then connects a fresh stream (resume=keys) and the AI carries on with the conversation so far.
+export async function pressKeys(ctx, callId, { callSid, digits, transcript, usage }) {
+  const { store, config } = ctx;
+  if (!(await store.claimCallStatus(callId, 'in_progress', 'pressing_keys'))) return { ok: false, message: 'The call isn\'t connected.' };
+  await store.updateCall(callId, { transcript: JSON.stringify(transcript ?? []), usage: JSON.stringify(usage ?? {}) });
+  try {
+    await updateCall(config.twilio, callSid, await streamTwiml(config, callId, { resume: 'keys', digits }));
+  } catch (err) {
+    await store.updateCall(callId, { status: 'in_progress' });
+    return { ok: false, message: 'The keys could not be pressed. Try saying the option out loud, or wait for an operator.' };
+  }
+  const call = await store.getCall(callId);
+  await store.logEvent(call.lead_id, 'pressed_keys', digits).catch(() => {});
+  return { ok: true };
+}
+
+// The call ended while switching back from a key press (the stream never reconnected): save what we have.
+async function finishPausedCall(ctx, call, duration) {
+  const transcript = JSON.parse(call.transcript || '[]');
+  const lead = await ctx.store.getLead(call.lead_id);
+  let analysis = {};
+  try { analysis = (await analyzeCall(ctx.config, lead, transcript)) ?? {}; } catch (err) { await ctx.store.logEvent(lead.id, 'analysis_failed', err.message); }
+  await recordCallResult(ctx, call.id, {
+    summary: analysis.summary ?? 'The call ended in the business\'s phone menu.', transcript,
+    outcome: analysis.outcome ?? 'no_answer', collected: collectedFrom(analysis), duration,
+  });
+}
+
+// The fields the after-call analysis may fill in, as saved with the call.
+export const collectedFrom = (a) => ({
+  meeting_time: a.meeting_time || null, email: a.email || null, decision_maker_name: a.decision_maker_name || null,
+  next_step: a.next_step || null, requests: a.requests || null, business_name: a.business_name || null,
+  callback_at: /^\d{4}-\d{2}-\d{2} \d{1,2}:\d{2}$/.test(String(a.callback_at || '').trim()) ? String(a.callback_at).trim() : null,
+});
 
 // Estimated cost of a call in cents (see costs.js).
 function callCostCents(config, { usage, duration, inbound, extraSeconds = 0 }) {
@@ -198,6 +279,8 @@ export async function handleTwilioStatus(ctx, callId, params) {
         // Answered, but our audio stream never connected (wrong PUBLIC_URL, proxy without websockets...).
         await recordNotConnected(ctx, callId, 'the call was answered but the AI audio never connected; check PUBLIC_URL', 'failed');
       }
+    } else if (call.status === 'pressing_keys') {
+      await finishPausedCall(ctx, call, Number(params.CallDuration) || null);
     } else if (call.status === 'transferring') {
       // The call ended during or after a transfer without the Dial result arriving first.
       await finalizeTransfer(ctx, callId, { duration: Number(params.CallDuration) || null });
@@ -502,6 +585,7 @@ export async function markDoNotCall(ctx, { lead_id, reason }) {
 // ---- After-call analysis (OpenAI provider) ----
 
 export async function analyzeCall(config, lead, transcript, endReason) {
+  const tz = leadTimezone(lead, config.calling);
   if (!transcript.some((t) => t.role === 'user')) {
     return { outcome: endReason === 'voicemail' ? 'voicemail' : 'no_answer', summary: 'Nobody spoke on the call.' };
   }
@@ -520,7 +604,9 @@ export async function analyzeCall(config, lead, transcript, endReason) {
             '"meeting_time": "agreed follow-up time or empty", "email": "email they gave or empty", ' +
             '"decision_maker_name": "owner/decision maker name or empty", "next_step": "what the salesperson should do next", ' +
             '"requests": "changes they want, questions the AI could not answer, and anything promised to them, or empty", ' +
-            '"business_name": "the caller\'s business name if they said it, or empty"}. ' +
+            '"business_name": "the caller\'s business name if they said it, or empty", ' +
+            '"callback_at": "if they asked to be called back at a particular day and time, that time as YYYY-MM-DD HH:MM ' +
+            `(24-hour, their local time; it was ${localNowText(tz)} for them during the call), else empty"}. ` +
             'Use "link_sent" if they agreed to receive the preview, "sold" only if they clearly agreed to buy.',
         },
         { role: 'user', content: text },

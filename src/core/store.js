@@ -97,7 +97,7 @@ export function createStore(db) {
                       AND NOT EXISTS (SELECT 1 FROM calls c WHERE c.lead_id = leads.id AND c.status IN ('transferring', 'finalizing')
                                       AND c.created_at >= datetime(?))`, olderThanIso, transferOlderThanIso);
       await db.run(`UPDATE calls SET status = 'failed', error = COALESCE(error, 'no result was received for this call')
-                    WHERE status IN ('initiated', 'ringing', 'in_progress') AND created_at < datetime(?)`, olderThanIso);
+                    WHERE status IN ('initiated', 'ringing', 'in_progress', 'pressing_keys') AND created_at < datetime(?)`, olderThanIso);
       await db.run(`UPDATE calls SET status = 'failed', error = COALESCE(error, 'the transfer never finished')
                     WHERE status IN ('transferring', 'finalizing') AND created_at < datetime(?)`, transferOlderThanIso);
     },
@@ -144,6 +144,15 @@ export function createStore(db) {
               ON CONFLICT(lead_id) DO UPDATE SET not_before = excluded.not_before, reason = excluded.reason, claimed_at = NULL,
                 ignore_window = 0, campaign_id = excluded.campaign_id`,
       Number(leadId), notBeforeIso, reason, campaignId),
+    // A time the business asked us to call back: kept exactly (not moved into the calling window), in no
+    // campaign (so pausing one doesn't hold it up), and created fresh so it outlives the call it was set on.
+    async scheduleCallback(leadId, atIso) {
+      await db.run('DELETE FROM queue_items WHERE lead_id = ?', Number(leadId));
+      await db.run(`INSERT INTO queue_items (lead_id, not_before, ignore_window, reason, campaign_id, created_at)
+                    VALUES (?, ?, 1, 'callback requested', NULL, datetime('now'))`, Number(leadId), atIso);
+    },
+    callbackSetSince: async (leadId, sinceSql) => Boolean(await db.get(`SELECT 1 AS x FROM queue_items WHERE lead_id = ?
+      AND reason = 'callback requested' AND created_at >= ?`, Number(leadId), sinceSql)),
     dropStoppedQueueItems: (list) =>
       db.run(`DELETE FROM queue_items WHERE lead_id IN (SELECT value FROM json_each(?))
               AND campaign_id IN (SELECT id FROM campaigns WHERE status IN ('stopped', 'archived'))`, ids(list)),
@@ -162,7 +171,10 @@ export function createStore(db) {
     rescheduleQueueItem: (id, notBeforeIso) =>
       db.run('UPDATE queue_items SET not_before = ?, claimed_at = NULL WHERE id = ?', notBeforeIso, id),
     deleteQueueItem: (id) => db.run('DELETE FROM queue_items WHERE id = ?', id),
-    dequeueLead: (leadId) => db.run('DELETE FROM queue_items WHERE lead_id = ?', Number(leadId)),
+    // keepSinceSql: a call-back time set during this call (created since then) stays.
+    dequeueLead: (leadId, keepSinceSql = null) => (keepSinceSql
+      ? db.run(`DELETE FROM queue_items WHERE lead_id = ? AND NOT (reason = 'callback requested' AND created_at >= ?)`, Number(leadId), keepSinceSql)
+      : db.run('DELETE FROM queue_items WHERE lead_id = ?', Number(leadId))),
     async queueStats() {
       const r = await db.get(`SELECT COUNT(*) AS n, MIN(CASE WHEN q.campaign_id IS NULL OR c.status = 'running' THEN q.not_before END) AS next_at
                               FROM queue_items q LEFT JOIN campaigns c ON c.id = q.campaign_id WHERE q.claimed_at IS NULL`);
