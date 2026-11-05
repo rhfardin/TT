@@ -3,7 +3,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import promptTemplate from '../prompts/sales-agent.md';
 import { buildConfig } from '../src/core/config.js';
-import { SCHEMA } from '../src/core/schema.js';
+import { migrate } from '../src/core/schema.js';
 import { createStore } from '../src/core/store.js';
 import { handleRequest } from '../src/core/api.js';
 import { prepareBatch, runQueued, releaseQueued } from '../src/core/queue.js';
@@ -12,9 +12,10 @@ import { validTwilioSignature } from '../src/core/twilio.js';
 import { resendSender } from '../src/core/email.js';
 import { CallBridge } from '../src/core/bridge.js';
 
+// Runs the migrations once per Worker instance.
 let schemaReady;
 function ensureSchema(env) {
-  schemaReady ??= env.DB.batch(SCHEMA.map((sql) => env.DB.prepare(sql))).catch((err) => {
+  schemaReady ??= migrate(d1(env.DB)).catch((err) => {
     schemaReady = null;
     throw err;
   });
@@ -25,7 +26,10 @@ function d1(DB) {
   return {
     all: async (sql, ...args) => (await DB.prepare(sql).bind(...args).all()).results,
     get: async (sql, ...args) => (await DB.prepare(sql).bind(...args).first()) ?? null,
-    run: async (sql, ...args) => ({ lastId: (await DB.prepare(sql).bind(...args).run()).meta.last_row_id }),
+    async run(sql, ...args) {
+      const { meta } = await DB.prepare(sql).bind(...args).run();
+      return { lastId: meta.last_row_id, changes: meta.changes };
+    },
     async batch(statements) {
       for (let i = 0; i < statements.length; i += 50) {
         await DB.batch(statements.slice(i, i + 50).map(([sql, ...args]) => DB.prepare(sql).bind(...args)));

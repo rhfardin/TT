@@ -1,3 +1,6 @@
+// Database schema. SCHEMA creates the original tables; MIGRATIONS bring any database (new or old)
+// up to the current version. Both node:sqlite and Cloudflare D1 run them through migrate().
+
 export const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS leads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,3 +48,33 @@ export const SCHEMA = [
     value TEXT
   )`,
 ];
+
+// Each entry runs once, in order. Never edit a released migration; add a new one.
+export const MIGRATIONS = [
+  {
+    version: 2,
+    statements: [
+      'CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status)',
+      'CREATE INDEX IF NOT EXISTS idx_calls_lead ON calls(lead_id)',
+      'CREATE INDEX IF NOT EXISTS idx_events_lead ON events(lead_id)',
+    ],
+  },
+];
+
+export const SCHEMA_VERSION = MIGRATIONS.at(-1).version;
+
+// db: { get(sql, ...args), run(sql, ...args) }
+export async function migrate(db) {
+  for (const stmt of SCHEMA) await db.run(stmt);
+  await db.run('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
+  const row = await db.get("SELECT value FROM meta WHERE key = 'schema_version'");
+  let version = Number(row?.value ?? 1);
+  for (const m of MIGRATIONS) {
+    if (m.version <= version) continue;
+    for (const stmt of m.statements) await db.run(stmt);
+    await db.run("INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      String(m.version));
+    version = m.version;
+  }
+  return version;
+}

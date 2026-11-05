@@ -3,11 +3,11 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
+import { openSqlite } from './sqlite.js';
 import nodemailer from 'nodemailer';
 import { WebSocketServer, WebSocket } from 'ws';
 import { buildConfig } from './core/config.js';
-import { SCHEMA } from './core/schema.js';
+import { migrate } from './core/schema.js';
 import { createStore } from './core/store.js';
 import { handleRequest } from './core/api.js';
 import { prepareBatch, runQueued, releaseQueued } from './core/queue.js';
@@ -26,14 +26,9 @@ const promptTemplate = () => fs.readFileSync(path.join(root, 'prompts', 'sales-a
 
 // ---- Database (SQLite file in DATA_DIR) ----
 fs.mkdirSync(config.dataDir, { recursive: true });
-const sqlite = new DatabaseSync(path.join(config.dataDir, 'caller.db'));
-sqlite.exec('PRAGMA journal_mode = WAL');
-for (const stmt of SCHEMA) sqlite.exec(stmt);
-const store = createStore({
-  all: async (sql, ...args) => sqlite.prepare(sql).all(...args),
-  get: async (sql, ...args) => sqlite.prepare(sql).get(...args) ?? null,
-  run: async (sql, ...args) => ({ lastId: Number(sqlite.prepare(sql).run(...args).lastInsertRowid) }),
-});
+const sqlAdapter = openSqlite(path.join(config.dataDir, 'caller.db'));
+await migrate(sqlAdapter);
+const store = createStore(sqlAdapter);
 
 // ---- Email: SMTP if configured, otherwise Resend ----
 function smtpSender(cfg) {
@@ -132,8 +127,8 @@ app.use(['/api', '/tools'], express.json({ limit: '20mb' }), async (req, res) =>
 app.get('/healthz', (req, res) => res.send('ok'));
 app.use(express.static(path.join(root, 'public')));
 
-const server = app.listen(config.port, () => {
-  console.log(`AI caller running on port ${config.port} (public URL ${config.publicUrl}, voice: ${config.voiceProvider})`);
+export const server = app.listen(config.port, () => {
+  console.log(`AI caller running on port ${server.address().port} (public URL ${config.publicUrl}, voice: ${config.voiceProvider})`);
 });
 
 // ---- Twilio media streams → OpenAI Realtime ----

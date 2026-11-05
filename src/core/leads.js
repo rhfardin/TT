@@ -1,34 +1,66 @@
-// Spreadsheet → lead rows. Pure functions shared by the Node server and the Cloudflare Worker.
+// Spreadsheet → lead rows, phone numbers and calling hours. Pure functions shared by the Node server
+// and the Cloudflare Worker.
+import { timezoneFromPhone, timezoneAlias } from './areacodes.js';
 
-// Headers are matched loosely (case/spacing/punctuation ignored).
+// Headers are matched loosely (case/spacing/punctuation ignored): exact names first, then "contains".
 const ALIASES = {
-  business_name: ['business name', 'business', 'company', 'company name', 'name of business', 'practice', 'practice name', 'clinic', 'name'],
-  contact_name: ['owner', 'owner name', 'contact', 'contact name', 'first name', 'decision maker', 'doctor'],
-  phone: ['phone', 'phone number', 'number', 'mobile', 'telephone', 'tel', 'contact number', 'business phone'],
-  email: ['email', 'email address', 'e-mail', 'mail'],
-  demo_link: ['demo', 'demo link', 'redesign', 'redesign link', 'redesigned website', 'new website', 'new site', 'preview', 'preview link', 'mockup', 'link', 'redesigned site'],
-  website: ['website', 'current website', 'old website', 'site', 'url', 'existing website', 'domain'],
-  category: ['category', 'industry', 'niche', 'type', 'business type', 'vertical'],
-  city: ['city', 'location', 'area', 'address', 'state'],
-  timezone: ['timezone', 'time zone', 'tz'],
-  notes: ['notes', 'details', 'detail', 'description', 'info', 'about', 'comments', 'business details'],
+  business_name: {
+    exact: ['business name', 'business', 'company', 'company name', 'name of business', 'practice', 'practice name', 'clinic', 'name'],
+    contains: ['business name', 'company name', 'practice name', 'clinic name'],
+  },
+  contact_name: {
+    exact: ['owner', 'owner name', 'contact', 'contact name', 'first name', 'decision maker', 'doctor'],
+    contains: ['owner', 'contact name', 'decision maker'],
+  },
+  phone: {
+    exact: ['phone', 'phone number', 'number', 'mobile', 'telephone', 'tel', 'contact number', 'business phone'],
+    contains: ['phone', 'telephone'],
+  },
+  email: {
+    exact: ['email', 'email address', 'e-mail', 'e mail', 'mail'],
+    contains: ['email', 'e mail'],
+  },
+  demo_link: {
+    exact: ['demo', 'demo link', 'redesign', 'redesign link', 'redesigned website', 'new website', 'new site', 'preview',
+      'preview link', 'mockup', 'link', 'redesigned site'],
+    contains: ['redesign', 'preview', 'mockup', 'demo', 'new website', 'new site'],
+  },
+  website: {
+    exact: ['website', 'current website', 'old website', 'site', 'url', 'existing website', 'domain', 'website url'],
+    contains: ['website', 'web site'],
+  },
+  category: {
+    exact: ['category', 'industry', 'niche', 'type', 'business type', 'vertical'],
+    contains: ['category', 'industry', 'niche'],
+  },
+  city: { exact: ['city', 'location', 'area', 'town'], contains: ['city'] },
+  timezone: { exact: ['timezone', 'time zone', 'tz'], contains: ['timezone', 'time zone'] },
+  notes: {
+    exact: ['notes', 'details', 'detail', 'description', 'info', 'about', 'comments', 'business details'],
+    contains: ['notes', 'details', 'description'],
+  },
 };
+// Links that are never the business's website or the redesign preview.
+const NOT_A_SITE = /linkedin|facebook|instagram|twitter|tiktok|youtube|yelp|google|maps|review/;
 
 export const LEAD_FIELDS = Object.keys(ALIASES);
+const CONTAINS_ORDER = ['email', 'phone', 'timezone', 'demo_link', 'website', 'business_name', 'contact_name', 'category', 'city', 'notes'];
 
 const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 export function mapHeaders(headers) {
   const mapping = {};
   const used = new Set();
-  // Exact alias matches first, then "header contains alias" as a fallback.
   for (const pass of ['exact', 'contains']) {
-    for (const [field, aliases] of Object.entries(ALIASES)) {
+    // Specific fields first, so "Owner Email" is an email column, not the owner's name.
+    for (const field of CONTAINS_ORDER) {
+      const aliases = ALIASES[field];
       if (mapping[field] !== undefined) continue;
       const idx = headers.findIndex((h, i) => {
         if (used.has(i)) return false;
         const n = norm(h);
-        return pass === 'exact' ? aliases.includes(n) : aliases.some((a) => a.length > 3 && n.includes(a));
+        if ((field === 'website' || field === 'demo_link') && NOT_A_SITE.test(n)) return false;
+        return pass === 'exact' ? aliases.exact.includes(n) : aliases.contains.some((a) => n.includes(a));
       });
       if (idx !== -1) {
         mapping[field] = idx;
@@ -39,17 +71,30 @@ export function mapHeaders(headers) {
   return mapping;
 }
 
+// Returns an E.164 number ("+15125550100") or null when it isn't a usable phone number.
 export function normalizePhone(raw, countryCode = '1') {
   if (raw === null || raw === undefined) return null;
-  const s = String(raw).trim();
+  let s = String(raw).trim();
   if (!s) return null;
+  if (/^\d+(\.\d+)?e\+?\d+$/i.test(s)) s = Number(s).toFixed(0); // Excel scientific notation
+  s = s.replace(/\s*(?:ext\.?|extension|x|#)\s*\d{1,6}\s*$/i, ''); // drop extensions
   let digits = s.replace(/\D/g, '');
-  if (s.startsWith('00')) return '+' + digits.slice(2);
-  if (s.startsWith('+')) return '+' + digits;
-  if (countryCode === '1' && digits.length === 11 && digits.startsWith('1')) return '+' + digits;
-  if (digits.startsWith('0')) digits = digits.slice(1); // national trunk prefix
-  if (digits.length < 7) return null;
-  return '+' + countryCode + digits;
+  let intl;
+  if (s.startsWith('+')) intl = digits;
+  else if (s.startsWith('00')) intl = digits.slice(2);
+  else if (countryCode === '1') {
+    if (digits.length === 11 && digits.startsWith('1')) intl = digits;
+    else if (digits.length === 10) intl = '1' + digits;
+    else return null;
+  } else if (digits.startsWith(countryCode) && digits.length >= countryCode.length + 8) {
+    intl = digits; // already has the country code
+  } else {
+    if (digits.startsWith('0')) digits = digits.slice(1); // national trunk prefix
+    intl = countryCode + digits;
+  }
+  if (intl.length < 8 || intl.length > 15) return null;
+  if (intl.startsWith('1') && intl.length !== 11) return null; // North American numbers are +1 and 10 digits
+  return '+' + intl;
 }
 
 // rows: array of arrays of strings, first row = headers.
@@ -61,14 +106,15 @@ export function rowsToLeads(rows, countryCode) {
   if (mapping.business_name === undefined) throw new Error(`Could not find a business name column. Headers found: ${headers.join(', ')}`);
 
   const mappedIdx = new Set(Object.values(mapping));
-  const leads = [];
+  const byPhone = new Map();
   const skipped = [];
+  let duplicates = 0;
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i] || [];
+    if (!r.some((x) => String(x ?? '').trim())) continue;
     const get = (f) => (mapping[f] === undefined ? null : String(r[mapping[f]] ?? '').trim() || null);
     const phone = normalizePhone(get('phone'), countryCode);
     const name = get('business_name');
-    if (!r.some((x) => String(x ?? '').trim())) continue;
     if (!phone || !name) {
       skipped.push({ row: i + 1, reason: !name ? 'no business name' : 'no valid phone' });
       continue;
@@ -80,10 +126,17 @@ export function rowsToLeads(rows, countryCode) {
     const lead = { phone, extra: JSON.stringify(extra) };
     for (const f of LEAD_FIELDS) if (f !== 'phone') lead[f] = get(f);
     lead.business_name = name;
-    leads.push(lead);
+    // The same number twice in one sheet: later rows fill in what earlier rows left empty.
+    const prev = byPhone.get(phone);
+    if (prev) {
+      duplicates++;
+      for (const [k, v] of Object.entries(lead)) if (v) prev[k] = v;
+    } else {
+      byPhone.set(phone, lead);
+    }
   }
   const mappedHeaders = Object.fromEntries(Object.entries(mapping).map(([f, i]) => [f, headers[i]]));
-  return { leads, skipped, mapping: mappedHeaders };
+  return { leads: [...byPhone.values()], skipped, duplicates, mapping: mappedHeaders };
 }
 
 export const UPSERT_LEAD_SQL = `
@@ -104,23 +157,40 @@ export const UPSERT_LEAD_SQL = `
 export const upsertArgs = (l) => [l.business_name, l.contact_name, l.phone, l.email, l.website, l.demo_link,
   l.category, l.city, l.timezone, l.notes, l.extra];
 
-export function localTimeInfo(timezone, defaultTimezone) {
-  let tz = timezone || defaultTimezone;
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: tz });
-  } catch {
-    tz = defaultTimezone;
+// ---- Timezones and calling hours ----
+
+const formatters = new Map();
+function formatter(tz) {
+  let f = formatters.get(tz);
+  if (f === undefined) {
+    try {
+      f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: 'numeric', hourCycle: 'h23', weekday: 'short' });
+    } catch {
+      f = null; // not a real timezone
+    }
+    formatters.set(tz, f);
   }
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hourCycle: 'h23', weekday: 'short' })
-    .formatToParts(new Date());
-  const hour = Number(parts.find((p) => p.type === 'hour').value);
-  const wd = parts.find((p) => p.type === 'weekday').value;
-  const day = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }[wd];
-  return { tz, hour, day };
+  return f;
+}
+export const isValidTimezone = (tz) => Boolean(tz) && formatter(tz) !== null;
+
+// Sheet value ("America/Chicago", "Central", "PST"), else the phone's area code, else the default.
+export function leadTimezone(lead, calling) {
+  for (const tz of [lead.timezone, timezoneAlias(lead.timezone), timezoneFromPhone(lead.phone), calling.defaultTimezone]) {
+    if (isValidTimezone(tz)) return tz;
+  }
+  return 'America/New_York';
 }
 
-export function canCallNow(lead, calling) {
-  const { tz, hour, day } = localTimeInfo(lead.timezone, calling.defaultTimezone);
+const DAYS = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+export function localTimeInfo(tz, now = new Date()) {
+  const parts = formatter(tz).formatToParts(now);
+  const get = (type) => parts.find((p) => p.type === type).value;
+  return { tz, hour: Number(get('hour')), minute: Number(get('minute')), day: DAYS[get('weekday')] };
+}
+
+export function canCallNow(lead, calling, now = new Date()) {
+  const { tz, hour, day } = localTimeInfo(leadTimezone(lead, calling), now);
   if (!calling.days.includes(day)) return { ok: false, reason: `outside calling days in ${tz}` };
   if (hour < calling.windowStartHour || hour >= calling.windowEndHour) {
     return { ok: false, reason: `it is ${hour}:00 in ${tz}; calling window is ${calling.windowStartHour}:00-${calling.windowEndHour}:00` };
@@ -128,13 +198,28 @@ export function canCallNow(lead, calling) {
   return { ok: true };
 }
 
-const DONT_CALL = new Set(['dnc', 'won', 'not_interested']);
+// The next moment (at or after `from`) that falls inside the lead's calling window.
+export function nextWindowStart(lead, calling, from = new Date()) {
+  if (canCallNow(lead, calling, from).ok) return from;
+  const { hour, minute, day } = localTimeInfo(leadTimezone(lead, calling), from);
+  const nowMin = hour * 60 + minute;
+  for (let d = 0; d <= 7; d++) {
+    const weekday = ((day - 1 + d) % 7) + 1;
+    if (!calling.days.includes(weekday)) continue;
+    const ahead = d * 1440 + calling.windowStartHour * 60 - nowMin;
+    if (ahead > 0) return new Date(from.getTime() + ahead * 60000);
+  }
+  return new Date(from.getTime() + 24 * 3600 * 1000); // no calling days configured
+}
 
-export function checkLead(lead, calling, { ignoreWindow = false } = {}) {
+// Statuses that end a lead's calling for good.
+export const FINAL_STATUSES = ['dnc', 'won', 'not_interested'];
+
+export function checkLead(lead, calling, { ignoreWindow = false, now = new Date() } = {}) {
   if (!lead) return { ok: false, reason: 'lead not found' };
-  if (DONT_CALL.has(lead.status)) return { ok: false, reason: `status is ${lead.status}` };
+  if (FINAL_STATUSES.includes(lead.status)) return { ok: false, reason: `status is ${lead.status}` };
   if (lead.status === 'calling') return { ok: false, reason: 'a call is already in progress' };
   if (lead.attempts >= calling.maxAttempts) return { ok: false, reason: `already tried ${lead.attempts} times` };
-  if (!ignoreWindow) return canCallNow(lead, calling);
+  if (!ignoreWindow) return canCallNow(lead, calling, now);
   return { ok: true };
 }
