@@ -39,6 +39,8 @@ export const SETTINGS = [
   { key: 'RETRY_NO_ANSWER_HOURS' },
   { key: 'RETRY_VOICEMAIL_HOURS' },
   { key: 'RECORD_CALLS' },
+  { key: 'TRANSFER_ENABLED' },
+  { key: 'TRANSFER_PHONE' },
 ];
 const BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 
@@ -66,6 +68,8 @@ const VALIDATE = {
   RETRY_VOICEMAIL_HOURS: int(1, 336),
   AMD_ENABLED: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
   RECORD_CALLS: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
+  TRANSFER_ENABLED: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
+  TRANSFER_PHONE: (v) => (/^\+\d{8,15}$/.test(v) ? null : 'must look like +15551234567'),
   TWILIO_FROM_NUMBER: (v) => (/^\+\d{8,15}$/.test(v) ? null : 'must look like +15551234567'),
 };
 const LABELS = {
@@ -73,6 +77,7 @@ const LABELS = {
   MAX_ATTEMPTS: 'Max tries', DEFAULT_COUNTRY_CODE: 'Country code', CALL_DAYS: 'Days', DEFAULT_TIMEZONE: 'Default timezone',
   TWILIO_FROM_NUMBER: 'Twilio phone number', MAX_CALL_SECONDS: 'Max call length', RETRY_NO_ANSWER_HOURS: 'Retry after no answer',
   RETRY_VOICEMAIL_HOURS: 'Retry after voicemail', AMD_ENABLED: 'Voicemail detection', RECORD_CALLS: 'Record calls',
+  TRANSFER_ENABLED: 'Live transfer', TRANSFER_PHONE: 'Your phone for transfers',
 };
 
 // Blank secret fields mean "keep the current one"; blank normal fields mean "use the default".
@@ -92,5 +97,7 @@ export function cleanSettingsUpdate(body, current = {}) {
   const start = Number(values.CALL_WINDOW_START || current.CALL_WINDOW_START || 9);
   const end = Number(values.CALL_WINDOW_END || current.CALL_WINDOW_END || 17);
   if (start >= end) errors.push('Start hour must be before end hour');
+  const transferOn = (values.TRANSFER_ENABLED ?? current.TRANSFER_ENABLED) === 'true';
+  if (transferOn && !(values.TRANSFER_PHONE ?? current.TRANSFER_PHONE)) errors.push('Add your phone number to turn on live transfer');
   return { values, errors };
 }

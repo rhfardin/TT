@@ -18,6 +18,7 @@ Your sheet (.xlsx/.csv) ──► Dashboard (your domain) ──► "Call" ─�
 - **Right local time.** The timezone comes from the sheet ("America/Chicago", "Central", "PST" all work), otherwise from the phone's area code, otherwise from your default. A Los Angeles business isn't called at 9 am New York time.
 - **Voicemail detection.** Twilio detects answering machines in the first seconds; the AI waits 2 seconds before speaking, so it usually hangs up before saying a word. No message is left.
 - **Automatic retries.** Businesses in your call list that don't answer or go to voicemail are called again later (24 h / 48 h by default), at a different time of day each try, up to the max tries.
+- **Live transfer to you (optional).** The AI closes deals itself. If an owner asks to talk to you, it says "one sec, let me grab him" and rings your phone. You hear the business name and what they want, then press 1 to take the call. If you don't, the AI comes back on, apologizes, and books a callback, so owners never land in your voicemail. Turn it on, and add your number, in Settings → Live transfer. It only rings during calling hours.
 - **Recordings (optional).** Turn on in Settings to play calls back in the dashboard; the AI then says the call is recorded.
 - **Personalized pitch.** Each call gets the business's name, category, city, current site and your notes. The script is in [`prompts/sales-agent.md`](prompts/sales-agent.md); edit it freely.
 - **Closes on the call.** When they agree, the AI sends the preview link and your booking/payment links by email (or SMS) during the call.
@@ -113,7 +114,7 @@ Add yourself as a row in the sheet (with your own phone number), upload it, and 
 3. Workspace settings → **Post-call webhook** → `https://<domain>/webhooks/elevenlabs`. Copy its secret to `ELEVENLABS_WEBHOOK_SECRET`.
 4. Copy the agent ID and API key into `.env` and set `VOICE_PROVIDER=elevenlabs`.
 
-With ElevenLabs, Twilio's voicemail detection and the Settings recording switch don't apply, because ElevenLabs places the call. Turn on the agent's **Voicemail detection** system tool and recording in ElevenLabs instead. The call queue, calling hours and automatic retries work the same with both.
+With ElevenLabs, Twilio's voicemail detection, the Settings recording switch and live transfer don't apply, because ElevenLabs places the call. For transfers, add ElevenLabs' built-in **Transfer to number** system tool with your phone number, and tell the agent to use it only when the owner asks to speak to you. Turn on the agent's **Voicemail detection** system tool and recording in ElevenLabs instead. The call queue, calling hours and automatic retries work the same with both.
 
 ## Calling the right way (read this)
 

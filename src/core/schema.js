@@ -89,6 +89,14 @@ export const MIGRATIONS = [
       'ALTER TABLE calls ADD COLUMN recording_sid TEXT',
     ],
   },
+  {
+    // Live transfer to the owner: ringing / connected / declined / missed, and what the AI told him.
+    version: 5,
+    statements: [
+      'ALTER TABLE calls ADD COLUMN transfer_state TEXT',
+      'ALTER TABLE calls ADD COLUMN transfer_summary TEXT',
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).version;

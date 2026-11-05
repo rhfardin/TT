@@ -6,9 +6,11 @@
 //   connectOpenAI(url, apiKey, { onMessage(text), onClose(), onError(err) }) -> Promise<{ send(text), close(), isOpen() }>
 // }
 // Every public method catches its own errors: a failing call must never crash the server.
-import { renderPrompt, firstGreeting, REALTIME_TOOLS } from './agent.js';
+import { renderPrompt, firstGreeting, realtimeTools } from './agent.js';
 import { streamToken, hangUp } from './twilio.js';
-import { sendDemoLink, markDoNotCall, recordCallResult, recordVoicemail, analyzeCall, isMachine } from './actions.js';
+import {
+  sendDemoLink, markDoNotCall, recordCallResult, recordVoicemail, analyzeCall, isMachine, transferAvailable, startTransfer,
+} from './actions.js';
 import { safeEqual } from './crypto.js';
 
 // Duration of a base64 chunk of 8 kHz mu-law audio (1 byte per sample).
@@ -75,6 +77,7 @@ export class CallBridge {
           const i = this.marks.indexOf(msg.mark?.name);
           if (i >= 0) this.marks.splice(0, i + 1);
           if (msg.mark?.name === 'hangup') await this.hangup();
+          if (msg.mark?.name === 'transfer') await this.doTransfer();
           return;
         }
         case 'stop': return this.io.closeTwilio();
@@ -92,7 +95,10 @@ export class CallBridge {
     try { expected = callId ? await streamToken(this.config.twilio, callId) : null; } catch { /* no Twilio auth token */ }
     const call = expected && safeEqual(p.token, expected) ? await this.ctx.store.getCall(callId) : null;
     // Only the call we just placed may connect, once: a replayed or stale stream is turned away.
-    const fresh = call && ['initiated', 'ringing'].includes(call.status) && (!call.call_sid || call.call_sid === start.callSid);
+    // resume: the AI picks the call back up after a transfer the owner didn't take.
+    const resume = p.resume === '1';
+    const fresh = call && (resume ? call.status === 'transferring' && call.transfer_state === 'missed' : ['initiated', 'ringing'].includes(call.status)) &&
+      (!call.call_sid || call.call_sid === start.callSid);
     const lead = fresh && (await this.ctx.store.getLead(call.lead_id));
     if (!lead) {
       console.warn('media stream rejected');
@@ -101,6 +107,11 @@ export class CallBridge {
     this.callId = callId;
     this.callSid = call.call_sid || start.callSid;
     this.lead = lead;
+    this.resumed = resume;
+    if (resume) {
+      this.transcript = JSON.parse(call.transcript || '[]');
+      this.startedAt = Date.parse(`${call.created_at.replace(' ', 'T')}Z`) || this.startedAt; // time limit counts the whole call
+    }
     await this.ctx.store.updateCall(callId, { status: 'in_progress', call_sid: this.callSid });
     await this.connectOpenAI();
   }
@@ -119,14 +130,17 @@ export class CallBridge {
     }
     // The caller hung up while we were connecting: don't leave a paid AI session running.
     if (this.closed) return this.openai.close();
-    const guard = this.config.calling.amdEnabled;
+    const guard = this.config.calling.amdEnabled && !this.resumed;
+    this.transferOk = !this.resumed && transferAvailable(this.config, this.lead);
+    const transfer = this.resumed ? 'missed' : this.transferOk ? 'available' : 'unavailable';
     this.sendOpenAI({
       type: 'session.update',
       session: {
         type: 'realtime',
         model: realtimeModel,
         output_modalities: ['audio'],
-        instructions: renderPrompt(this.promptTemplate, this.lead, this.config.seller, { recording: this.config.recordCalls }),
+        instructions: renderPrompt(this.promptTemplate, this.lead, this.config.seller,
+          { recording: this.config.recordCalls, transfer, history: this.transcript }),
         audio: {
           input: {
             format: { type: 'audio/pcmu' },
@@ -136,7 +150,7 @@ export class CallBridge {
           },
           output: { format: { type: 'audio/pcmu' }, voice },
         },
-        tools: REALTIME_TOOLS,
+        tools: realtimeTools({ transfer: this.transferOk }),
         tool_choice: 'auto',
       },
     });
@@ -149,14 +163,18 @@ export class CallBridge {
         if (this.heardDuringGuard) this.sendOpenAI({ type: 'response.create' });
       });
     }
-    // People usually answer with "Hello?" first. If they stay silent, open the call ourselves.
-    this.greetTimer = this.later(3500, () => {
+    if (this.resumed) {
+      this.sendOpenAI({ type: 'response.create' }); // apologize and carry on (see the prompt)
+    } else {
+      // People usually answer with "Hello?" first. If they stay silent, open the call ourselves.
+      this.greetTimer = this.later(3500, () => {
       if (!this.userSpoke) {
-        this.sendOpenAI({ type: 'response.create', response: { instructions: `Say, warmly and casually: "${firstGreeting(this.lead)}"` } });
-      }
-    });
+          this.sendOpenAI({ type: 'response.create', response: { instructions: `Say, warmly and casually: "${firstGreeting(this.lead)}"` } });
+        }
+      });
+    }
     // Wrap up politely before the call's time limit, then hang up.
-    const limitMs = this.config.calling.maxCallSeconds * 1000;
+    const limitMs = this.config.calling.maxCallSeconds * 1000 - (Date.now() - this.startedAt);
     this.later(Math.max(limitMs - 30000, 10000), () => this.sendOpenAI({ type: 'response.create', response: {
       instructions: 'The call is almost out of time. Briefly wrap up: confirm the next step, say a warm goodbye, then call end_call.',
     } }));
@@ -230,7 +248,7 @@ export class CallBridge {
 
   // The caller started talking over the agent: stop playback and tell the model how much they heard.
   interrupt() {
-    const playing = this.marks.some((m) => m !== 'hangup');
+    const playing = this.marks.some((m) => m !== 'hangup' && m !== 'transfer');
     if (!playing || !this.item) return;
     const heardMs = Math.round(Math.min(Math.max(this.latestMediaTs - this.item.startTs, 0), this.item.sentMs));
     if (this.item.id) {
@@ -255,6 +273,16 @@ export class CallBridge {
           result = await sendDemoLink(this.ctx, { ...pick(args, ['email', 'contact_name', 'channel']), lead_id: this.lead.id });
         } else if (fc.name === 'mark_do_not_call') {
           result = await markDoNotCall(this.ctx, { ...pick(args, ['reason']), lead_id: this.lead.id });
+        } else if (fc.name === 'transfer_to_fardin') {
+          if (this.transferOk && !this.transferring) {
+            // Connect once "one sec, let me grab him" has finished playing. No reply to the model:
+            // its session ends when the call moves to the owner's phone.
+            this.transferring = { callId: fc.call_id, summary: String(args.summary || '').slice(0, 300) };
+            this.sendMark('transfer');
+            this.later(Math.max(0, this.playbackEnd - this.latestMediaTs) + 3000, () => this.doTransfer());
+            continue;
+          }
+          result = { ok: false, message: 'Live transfer is not available right now. Offer that he calls them back today, and get a good time.' };
         } else if (fc.name === 'end_call') {
           this.endReason = String(args.reason || 'finished');
           // Hang up when Twilio says the goodbye has finished playing, with a timer in case it never does.
@@ -271,6 +299,20 @@ export class CallBridge {
       if (fc.name !== 'end_call') needsResponse = true;
     }
     if (needsResponse) this.sendOpenAI({ type: 'response.create' });
+  }
+
+  async doTransfer() {
+    const t = this.transferring;
+    if (!t || t.started || this.closed) return;
+    t.started = true;
+    const r = await startTransfer(this.ctx, this.callId, { callSid: this.callSid, summary: t.summary, transcript: this.transcript });
+    if (r.ok) {
+      this.endReason = 'transfer';
+      return;
+    }
+    this.transferring = null;
+    this.sendOpenAI({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: t.callId, output: JSON.stringify(r) } });
+    this.sendOpenAI({ type: 'response.create' });
   }
 
   elapsed() {
@@ -290,6 +332,7 @@ export class CallBridge {
     this.timers.clear();
     if (this.openai?.isOpen()) this.openai.close();
     if (this.finished || !this.callId || !this.lead) return;
+    if (this.endReason === 'transfer') return; // the call continues on the owner's phone; saved by finalizeTransfer
     this.finished = true;
     try {
       const duration = this.elapsed();

@@ -46,12 +46,30 @@ export function promptVariables(lead, seller) {
 }
 
 // recording: calls are recorded, so the AI must say so (some US states require everyone's consent).
-export function renderPrompt(template, lead, seller, { recording = false } = {}) {
+// transfer: 'available' (the owner can be connected live), 'unavailable', or 'missed' (we just tried and
+//   he didn't pick up; history holds the conversation so far, so the AI can pick it back up).
+export function renderPrompt(template, lead, seller, { recording = false, transfer = 'unavailable', history = [] } = {}) {
   const vars = promptVariables(lead, seller);
+  const name = seller.yourName || 'the owner';
   let extra = lead.email ? `\n\n# Email on file\nThe email we have on file is ${lead.email}. Confirm it before sending.` : '';
   if (recording) {
     extra += '\n\n# This call is recorded\nIn your opening, right after saying you are an AI, add "and just so you know, this call is recorded." ' +
       'If they object, apologize, tell them you will make a note, and continue only if they are fine with it.';
+  }
+  if (transfer === 'available') {
+    extra += `\n\n# Talking to ${name} live\nYou close the deal yourself; don't offer to hand them over. Only if they ask to speak to ${name} ` +
+      `(or to "a real person", or the owner of the business you're calling for) and want to do it now: say something like ` +
+      `"Sure, one sec, let me grab him for you", then call transfer_to_fardin with a one-sentence summary for ${name} ` +
+      '(who they are and what they want). Say nothing after calling it.';
+  } else if (transfer === 'unavailable') {
+    extra += `\n\n# Talking to ${name} live\nIf they ask to speak to ${name} or a person right now: he can't jump on right this minute. ` +
+      `Offer that ${name} calls them back today, and get the best time and number for that.`;
+  } else if (transfer === 'missed') {
+    const lines = history.slice(-20).map((t) => `${t.role === 'agent' ? 'You' : 'Them'}: ${t.message}`).join('\n');
+    extra += `\n\n# Picking the call back up\nYou just tried to connect them to ${name}, but he couldn't pick up. ` +
+      `Start right away with a short apology ("Sorry about that, looks like ${name} is tied up right now"), then offer that he ` +
+      'calls them back today (get a good time) or that you email the preview. Keep it short. Don\'t introduce yourself again.' +
+      (lines ? `\n\nThe conversation so far:\n${lines}` : '');
   }
   return template.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? '') + extra;
 }
@@ -93,8 +111,22 @@ export const REALTIME_TOOLS = [
   },
 ];
 
+export const TRANSFER_TOOL = {
+  type: 'function',
+  name: 'transfer_to_fardin',
+  description: 'Connect the caller to the owner live. Only when they ask to speak to him or a person now.',
+  parameters: {
+    type: 'object',
+    properties: { summary: { type: 'string', description: 'One sentence for the owner: who this is and what they want.' } },
+    required: ['summary'],
+  },
+};
+
+export const realtimeTools = ({ transfer = false } = {}) => (transfer ? [...REALTIME_TOOLS, TRANSFER_TOOL] : REALTIME_TOOLS);
+
 // Maps the call outcome to a lead status.
 export const OUTCOME_STATUS = {
+  transferred: 'interested',
   sold: 'won',
   won: 'won',
   interested: 'interested',
@@ -108,7 +140,8 @@ export const OUTCOME_STATUS = {
   voicemail: 'voicemail',
   no_answer: 'no_answer',
 };
-export const OUTCOMES = Object.keys(OUTCOME_STATUS);
+// What the after-call analysis may choose from ("transferred" is set by the system, not guessed).
+export const OUTCOMES = Object.keys(OUTCOME_STATUS).filter((o) => o !== 'transferred');
 
 export function followUpMessage(lead, name, seller) {
   const lines = [

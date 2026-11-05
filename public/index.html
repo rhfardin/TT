@@ -277,6 +277,18 @@
           </div>
         </div>
 
+        <div class="card">
+          <h2>7. Live transfer to you</h2>
+          <p class="muted" style="margin:0">The AI closes deals itself. When an owner asks to talk to you, it says "one sec, let me grab him" and rings your phone. You hear who it is and what they want, then <b>press 1</b> to take the call. If you don't, the AI comes back on and books a callback, so owners never reach your voicemail.</p>
+          <div class="grid">
+            <div><label>Live transfer</label>
+              <select name="TRANSFER_ENABLED"><option value="false">Off</option><option value="true">On</option></select>
+              <div class="help">Turn off whenever you can't take calls. It only rings during calling hours.</div></div>
+            <div><label>Your phone number</label><input name="TRANSFER_PHONE" placeholder="+15551234567">
+              <div class="help">Calls come from your Twilio number.</div></div>
+          </div>
+        </div>
+
         <div class="savebar"><button class="primary">Save settings</button><span id="saveResult" class="muted"></span></div>
       </form>
     </section>
@@ -545,6 +557,8 @@ async function openLead(id) {
         <div class="row"><b>${esc(new Date(c.created_at.replace(' ', 'T') + 'Z').toLocaleString())}</b>
           ${c.duration_secs ? `<span class="muted">${Math.round(c.duration_secs / 60 * 10) / 10} min</span>` : ''}</div>
         ${/^(machine|fax)/.test(c.answered_by || '') ? '<p class="muted">Voicemail detected, so the AI hung up.</p>' : ''}
+        ${c.transfer_state === 'connected' ? `<p><span class="pill good">Transferred to you${c.outcome?.talk_secs ? ` · ${Math.max(1, Math.round(c.outcome.talk_secs / 60))} min` : ''}</span></p>` : ''}
+        ${['missed', 'declined'].includes(c.transfer_state) ? '<p><span class="pill warn">Tried to transfer to you; you didn\'t pick up</span></p>' : ''}
         ${c.error ? `<p style="color:var(--bad)">${esc(c.error)}</p>` : ''}
         ${c.recording_sid ? `<audio controls preload="none" src="/api/calls/${Number(c.id)}/recording" style="width:100%;margin:6px 0"></audio>` : ''}
         ${c.summary ? `<p>${esc(c.summary)}</p>` : ''}
@@ -578,7 +592,8 @@ $('#days').innerHTML = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 const DEFAULTS = { OPENAI_REALTIME_MODEL: 'gpt-realtime-mini', OPENAI_VOICE: 'marin', CALL_WINDOW_START: '9', CALL_WINDOW_END: '17',
   CALL_DAYS: '1,2,3,4,5', DEFAULT_TIMEZONE: 'America/New_York', DEFAULT_COUNTRY_CODE: '1', CALL_SPACING_SECONDS: '90', MAX_ATTEMPTS: '3', AGENT_NAME: 'Alex',
-  AMD_ENABLED: 'true', MAX_CALL_SECONDS: '420', RETRY_NO_ANSWER_HOURS: '24', RETRY_VOICEMAIL_HOURS: '48', RECORD_CALLS: 'false' };
+  AMD_ENABLED: 'true', MAX_CALL_SECONDS: '420', RETRY_NO_ANSWER_HOURS: '24', RETRY_VOICEMAIL_HOURS: '48', RECORD_CALLS: 'false',
+  TRANSFER_ENABLED: 'false' };
 
 let loadedSettings = {};
 async function loadSettings() {

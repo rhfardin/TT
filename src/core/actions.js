@@ -1,8 +1,8 @@
 // Everything that happens around a call, shared by the Node server and the Cloudflare Worker.
 // ctx = { config, store, sendEmail?(to, subject, text) }
-import { checkLead, nextWindowStart, FINAL_STATUSES } from './leads.js';
+import { checkLead, canCallNow, nextWindowStart, FINAL_STATUSES } from './leads.js';
 import { promptVariables, followUpMessage, OUTCOME_STATUS, OUTCOMES } from './agent.js';
-import { createStreamingCall, sendSms, hangUp } from './twilio.js';
+import { createStreamingCall, sendSms, hangUp, updateCall, transferTwiml, whisperTwiml, streamTwiml } from './twilio.js';
 import { hmacHex, safeEqual } from './crypto.js';
 
 export function providerProblem(config) {
@@ -139,8 +139,97 @@ export async function handleTwilioStatus(ctx, callId, params) {
     const call = await ctx.store.getCall(callId);
     if (call && ['initiated', 'ringing'].includes(call.status) && !isMachine(call.answered_by)) {
       await recordNotConnected(ctx, callId, 'the call was answered but the AI audio never connected; check PUBLIC_URL', 'failed');
+    } else if (call?.status === 'transferring') {
+      // The call ended during or after a transfer without the Dial result arriving first.
+      await finalizeTransfer(ctx, callId, { duration: Number(params.CallDuration) || null });
     }
   }
+}
+
+// ---- Live transfer to the owner (OpenAI provider) ----
+
+// The owner can take live calls: switched on, phone set, and inside this business's calling hours.
+export function transferAvailable(config, lead) {
+  return Boolean(config.transfer.enabled && config.transfer.phone && config.twilio.fromNumber && canCallNow(lead, config.calling).ok);
+}
+
+// Saves the conversation so far and hands the call over to the owner's phone.
+export async function startTransfer(ctx, callId, { callSid, summary, transcript }) {
+  const { store, config } = ctx;
+  await store.updateCall(callId, {
+    status: 'transferring', transfer_state: 'ringing', transfer_summary: String(summary || '').slice(0, 300),
+    transcript: JSON.stringify(transcript ?? []),
+  });
+  try {
+    await updateCall(config.twilio, callSid, transferTwiml(config, callId));
+    const call = await store.getCall(callId);
+    await store.logEvent(call.lead_id, 'transfer_started', summary);
+    return { ok: true };
+  } catch (err) {
+    await store.updateCall(callId, { status: 'in_progress', transfer_state: 'failed' });
+    return { ok: false, message: `The transfer didn't go through. Apologize and offer that ${config.seller.yourName || 'the owner'} calls them back today.` };
+  }
+}
+
+// TwiML played to the owner before he's connected.
+export async function handleTwilioWhisper(ctx, callId) {
+  const call = await ctx.store.getCall(callId);
+  const lead = call && (await ctx.store.getLead(call.lead_id));
+  if (!lead) return '<Response><Hangup/></Response>';
+  return whisperTwiml(ctx.config, callId, `Live transfer from your AI caller. ${lead.business_name}. ${call.transfer_summary || ''}`);
+}
+
+export async function handleTwilioWhisperAnswer(ctx, callId, params) {
+  const accepted = params.Digits === '1';
+  await ctx.store.updateCall(callId, { transfer_state: accepted ? 'connected' : 'declined' });
+  return accepted ? '<Response/>' : '<Response><Hangup/></Response>'; // empty response = connect the two calls
+}
+
+// The owner's leg of the call ended: either they talked, or he didn't take it and the AI picks it back up.
+export async function handleTwilioTransferResult(ctx, callId, params) {
+  const call = await ctx.store.getCall(callId);
+  if (!call || call.status !== 'transferring') return '<Response><Hangup/></Response>';
+  if (call.transfer_state === 'connected') {
+    await finalizeTransfer(ctx, callId, { talkSecs: Number(params.DialCallDuration) || 0 });
+    return '<Response><Hangup/></Response>';
+  }
+  await ctx.store.updateCall(callId, { transfer_state: 'missed' });
+  await ctx.store.logEvent(call.lead_id, 'transfer_missed', params.DialCallStatus || call.transfer_state);
+  return streamTwiml(ctx.config, callId, { resume: true });
+}
+
+// Records the result of a call that was handed over to the owner. Runs once per call.
+export async function finalizeTransfer(ctx, callId, { talkSecs = null, duration = null } = {}) {
+  const { store, config } = ctx;
+  if (!(await store.claimCallStatus(callId, 'transferring', 'finalizing'))) return;
+  const call = await store.getCall(callId);
+  const lead = await store.getLead(call.lead_id);
+  const transcript = JSON.parse(call.transcript || '[]');
+  let analysis = {};
+  try {
+    analysis = (await analyzeCall(config, lead, transcript)) ?? {};
+  } catch (err) {
+    await store.logEvent(lead.id, 'analysis_failed', err.message);
+  }
+  const name = config.seller.yourName || 'you';
+  const connected = call.transfer_state === 'connected';
+  const lead_in = connected
+    ? `Connected to ${name}${talkSecs ? ` for ${Math.max(1, Math.round(talkSecs / 60))} min` : ''}.`
+    : `They hung up while being connected to ${name}.`;
+  await recordCallResult(ctx, callId, {
+    summary: `${lead_in} ${analysis.summary || ''}`.trim(),
+    transcript,
+    outcome: connected ? 'transferred' : analysis.outcome || 'callback',
+    collected: {
+      meeting_time: analysis.meeting_time || null,
+      email: analysis.email || null,
+      decision_maker_name: analysis.decision_maker_name || null,
+      next_step: connected ? analysis.next_step || null : `Call them back: they wanted to talk to ${name}.`,
+      requests: analysis.requests || null,
+      talk_secs: talkSecs,
+    },
+    duration,
+  });
 }
 
 // Twilio's answering machine detection result (OpenAI provider).

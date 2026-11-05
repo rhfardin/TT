@@ -10,7 +10,10 @@ import { migrate } from './core/schema.js';
 import { createStore } from './core/store.js';
 import { handleRequest } from './core/api.js';
 import { runDue } from './core/queue.js';
-import { handleTwilioStatus, handleTwilioAmd, handleTwilioRecording, verifyElevenLabsSignature, handleElevenLabsWebhook } from './core/actions.js';
+import {
+  handleTwilioStatus, handleTwilioAmd, handleTwilioRecording, handleTwilioWhisper, handleTwilioWhisperAnswer,
+  handleTwilioTransferResult, verifyElevenLabsSignature, handleElevenLabsWebhook,
+} from './core/actions.js';
 import { validTwilioSignature } from './core/twilio.js';
 import { resendSender, textToHtml } from './core/email.js';
 import { CallBridge } from './core/bridge.js';
@@ -99,18 +102,22 @@ app.post('/webhooks/elevenlabs', express.raw({ type: '*/*', limit: '25mb' }), ro
 }));
 
 // Twilio callbacks are signed with the auth token; anything unsigned is rejected.
+// A handler may return TwiML telling Twilio what to do next.
 const twilioRoute = (handler) => [express.urlencoded({ extended: false }), route(async (req, res) => {
   const ctx = await makeCtx();
   const url = `${ctx.config.publicUrl}${req.originalUrl}`;
   if (!(await validTwilioSignature(ctx.config.twilio, url, req.body, req.get('x-twilio-signature')))) {
     return res.status(403).send('bad signature');
   }
-  await handler(ctx, Number(req.query.call), req.body);
-  res.type('text/xml').send('<Response/>');
+  const twiml = await handler(ctx, Number(req.query.call), req.body);
+  res.type('text/xml').send(typeof twiml === 'string' ? twiml : '<Response/>');
 })];
 app.post('/twilio/status', ...twilioRoute(handleTwilioStatus));
 app.post('/twilio/amd', ...twilioRoute(handleTwilioAmd));
 app.post('/twilio/recording', ...twilioRoute(handleTwilioRecording));
+app.post('/twilio/whisper', ...twilioRoute(handleTwilioWhisper));
+app.post('/twilio/whisper-answer', ...twilioRoute(handleTwilioWhisperAnswer));
+app.post('/twilio/transfer-result', ...twilioRoute(handleTwilioTransferResult));
 
 app.use(['/api', '/tools'], express.json({ limit: '20mb' }), route(async (req, res) => {
   const r = await handleRequest(await makeCtx(), {

@@ -17,6 +17,9 @@ export async function startApp(env = {}) {
     connectDelayMs: 0, // slow down the OpenAI handshake
     connections: 0,
     sms: [],
+    updates: [], // { sid, twiml } for live calls redirected (transfers)
+    failUpdates: false,
+    lastTwiml: null, // what our server answered to the last signed Twilio webhook
   };
 
   const openai = new WebSocketServer({
@@ -52,6 +55,11 @@ export async function startApp(env = {}) {
       }
       if (/\/Recordings\/\w+\.mp3$/.test(url)) return new Response(new Uint8Array([0x49, 0x44, 0x33]), { status: 200 });
       const m = url.match(/\/Calls\/(\w+)\.json$/);
+      if (m && body.Twiml) {
+        if (fake.failUpdates) return new Response(JSON.stringify({ message: 'Call is not in-progress' }), { status: 400 });
+        fake.updates.push({ sid: m[1], twiml: body.Twiml });
+        return new Response('{}');
+      }
       if (m) {
         fake.hangups.push(m[1]);
         return new Response('{}');
@@ -121,6 +129,7 @@ export async function startApp(env = {}) {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Twilio-Signature': sig },
       body: new URLSearchParams(params),
     });
+    fake.lastTwiml = await res.text();
     return res.status;
   }
 

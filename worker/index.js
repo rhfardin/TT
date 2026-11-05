@@ -7,7 +7,10 @@ import { migrate } from '../src/core/schema.js';
 import { createStore } from '../src/core/store.js';
 import { handleRequest } from '../src/core/api.js';
 import { runDue } from '../src/core/queue.js';
-import { handleTwilioStatus, handleTwilioAmd, handleTwilioRecording, verifyElevenLabsSignature, handleElevenLabsWebhook } from '../src/core/actions.js';
+import {
+  handleTwilioStatus, handleTwilioAmd, handleTwilioRecording, handleTwilioWhisper, handleTwilioWhisperAnswer,
+  handleTwilioTransferResult, verifyElevenLabsSignature, handleElevenLabsWebhook,
+} from '../src/core/actions.js';
 import { validTwilioSignature } from '../src/core/twilio.js';
 import { resendSender } from '../src/core/email.js';
 import { CallBridge } from '../src/core/bridge.js';
@@ -95,15 +98,23 @@ async function handle(request, env) {
   }
 
   // Twilio callbacks are signed with the auth token; anything unsigned is rejected.
-  const twilioHandlers = { '/twilio/status': handleTwilioStatus, '/twilio/amd': handleTwilioAmd, '/twilio/recording': handleTwilioRecording };
+  // A handler may return TwiML telling Twilio what to do next.
+  const twilioHandlers = {
+    '/twilio/status': handleTwilioStatus,
+    '/twilio/amd': handleTwilioAmd,
+    '/twilio/recording': handleTwilioRecording,
+    '/twilio/whisper': handleTwilioWhisper,
+    '/twilio/whisper-answer': handleTwilioWhisperAnswer,
+    '/twilio/transfer-result': handleTwilioTransferResult,
+  };
   if (request.method === 'POST' && twilioHandlers[path]) {
     const params = Object.fromEntries(new URLSearchParams(await request.text()));
     const fullUrl = `${ctx.config.publicUrl}${path}${url.search}`;
     if (!(await validTwilioSignature(ctx.config.twilio, fullUrl, params, request.headers.get('x-twilio-signature')))) {
       return new Response('bad signature', { status: 403 });
     }
-    await twilioHandlers[path](ctx, Number(url.searchParams.get('call')), params);
-    return new Response('<Response/>', { headers: { 'Content-Type': 'text/xml' } });
+    const twiml = await twilioHandlers[path](ctx, Number(url.searchParams.get('call')), params);
+    return new Response(typeof twiml === 'string' ? twiml : '<Response/>', { headers: { 'Content-Type': 'text/xml' } });
   }
 
   if (path.startsWith('/api/') || path.startsWith('/tools/')) {

@@ -20,17 +20,37 @@ async function post(tw, path, params) {
 export const streamToken = (tw, callId) => hmacHex(tw.authToken, `stream:${callId}`);
 
 const xmlAttr = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const xmlText = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+// Connects the call's audio to our media stream. resume: reconnecting the AI after a missed transfer.
+export async function streamTwiml(config, callId, { resume = false } = {}) {
+  const wsUrl = `${config.publicUrl.replace(/^http/, 'ws')}/media-stream/${callId}`;
+  return `<Response><Connect><Stream url="${xmlAttr(wsUrl)}">` +
+    `<Parameter name="callId" value="${callId}"/><Parameter name="token" value="${await streamToken(config.twilio, callId)}"/>` +
+    (resume ? '<Parameter name="resume" value="1"/>' : '') +
+    '</Stream></Connect></Response>';
+}
+
+// Rings the owner. He hears a short summary first and presses 1 to take the call (see whisperTwiml),
+// so the business owner never ends up in his voicemail.
+export function transferTwiml(config, callId) {
+  const u = (p) => xmlAttr(`${config.publicUrl}${p}?call=${callId}`);
+  return `<Response><Dial callerId="${xmlAttr(config.twilio.fromNumber)}" timeout="20" action="${u('/twilio/transfer-result')}">` +
+    `<Number url="${u('/twilio/whisper')}">${xmlText(config.transfer.phone)}</Number></Dial></Response>`;
+}
+
+export function whisperTwiml(config, callId, message) {
+  const action = xmlAttr(`${config.publicUrl}/twilio/whisper-answer?call=${callId}`);
+  return `<Response><Gather numDigits="1" timeout="8" action="${action}"><Say>${xmlText(message)}</Say>` +
+    '<Say>Press 1 to talk to them now.</Say></Gather><Hangup/></Response>';
+}
 
 export async function createStreamingCall(config, { to, callId }) {
   const tw = config.twilio;
-  const wsUrl = `${config.publicUrl.replace(/^http/, 'ws')}/media-stream/${callId}`;
-  const twiml = `<Response><Connect><Stream url="${xmlAttr(wsUrl)}">` +
-    `<Parameter name="callId" value="${callId}"/><Parameter name="token" value="${await streamToken(tw, callId)}"/>` +
-    '</Stream></Connect></Response>';
   const params = {
     To: to,
     From: tw.fromNumber,
-    Twiml: twiml,
+    Twiml: await streamTwiml(config, callId),
     StatusCallback: `${config.publicUrl}/twilio/status?call=${callId}`,
     Timeout: '25', // seconds to ring
     TimeLimit: String(config.calling.maxCallSeconds),
@@ -64,6 +84,9 @@ export async function fetchRecording(tw, recordingSid) {
 }
 
 export const hangUp = (tw, callSid) => post(tw, `/Calls/${encodeURIComponent(callSid)}.json`, { Status: 'completed' });
+
+// Replaces what a live call is doing with new TwiML (used to hand the call over to a person).
+export const updateCall = (tw, callSid, twiml) => post(tw, `/Calls/${encodeURIComponent(callSid)}.json`, { Twiml: twiml });
 
 export const sendSms = (tw, to, text) => post(tw, '/Messages.json', { To: to, From: tw.fromNumber, Body: text.slice(0, 1500) });
 

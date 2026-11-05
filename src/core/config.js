@@ -30,6 +30,12 @@ export function buildConfig(e) {
       webhookSecret: env('ELEVENLABS_WEBHOOK_SECRET'),
     },
 
+    // Live transfer: the AI connects owners who ask for the owner to this phone (press 1 to accept).
+    transfer: {
+      enabled: env('TRANSFER_ENABLED', 'false') === 'true',
+      phone: env('TRANSFER_PHONE'),
+    },
+
     // Shared secret the ElevenLabs agent's tools send in the X-Tool-Secret header.
     toolSecret: env('TOOL_SECRET'),
 

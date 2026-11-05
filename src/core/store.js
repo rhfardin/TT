@@ -6,7 +6,7 @@ import { UPSERT_LEAD_SQL, upsertArgs, FINAL_STATUSES } from './leads.js';
 const LEAD_COLUMNS = new Set(['business_name', 'contact_name', 'phone', 'email', 'website', 'demo_link', 'category',
   'city', 'timezone', 'notes', 'status', 'attempts', 'last_called_at', 'last_summary', 'meeting_time', 'is_test', 'in_campaign']);
 const CALL_COLUMNS = new Set(['conversation_id', 'call_sid', 'status', 'error', 'duration_secs', 'summary',
-  'transcript', 'outcome', 'ended_at', 'answered_by', 'recording_sid']);
+  'transcript', 'outcome', 'ended_at', 'answered_by', 'recording_sid', 'transfer_state', 'transfer_summary']);
 
 function setClause(fields, allowed) {
   const keys = Object.keys(fields).filter((k) => allowed.has(k));
@@ -89,6 +89,10 @@ export function createStore(db) {
     callsForLead: (leadId) => db.all('SELECT * FROM calls WHERE lead_id = ? ORDER BY id DESC', Number(leadId)),
     async insertCall(leadId, conversationId = null) {
       return (await db.run('INSERT INTO calls (lead_id, conversation_id) VALUES (?, ?)', Number(leadId), conversationId)).lastId;
+    },
+    // Moves a call from one status to another only if nobody else did first. Returns true if we did.
+    async claimCallStatus(id, from, to) {
+      return (await db.run('UPDATE calls SET status = ? WHERE id = ? AND status = ?', to, Number(id), from)).changes === 1;
     },
     async updateCall(id, fields) {
       const s = setClause(fields, CALL_COLUMNS);
