@@ -14,5 +14,5 @@ test('pasting numbers into Settings, and importing a sheet that has one of them'
   const leads = Object.fromEntries((await app.api('GET', '/api/leads')).body.leads.map((l) => [l.business_name, l.status]));
   assert.deepEqual(leads, { Listed: 'dnc', Fine: 'new' });
   assert.equal((await app.api('DELETE', '/api/dnc/+15125550700')).body.count, 1);
-  assert.deepEqual((await app.api('GET', '/api/status')).body.today, { calls: 0, limit: 80 });
+  assert.deepEqual((await app.api('GET', '/api/status')).body.today, { calls: 0, limit: 80, spentCents: 0, spendLimitCents: 0 });
 });

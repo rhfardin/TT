@@ -108,7 +108,9 @@ export async function handleRequest(ctx, req) {
       },
       calling: config.calling,
       queue: await queueState(ctx),
-      today: { calls: (await store.callsLast24h()).count, limit: config.calling.maxCallsPerDay },
+      today: { calls: (await store.callsLast24h()).count, limit: config.calling.maxCallsPerDay,
+        spentCents: await store.spendLast24h(), spendLimitCents: config.calling.dailySpendLimitCents },
+      paused: config.calling.paused,
       webhookUrl: `${config.publicUrl}/webhooks/elevenlabs`,
       inboundUrl: `${config.publicUrl}/twilio/inbound`,
       toolUrls: {
@@ -129,6 +131,7 @@ export async function handleRequest(ctx, req) {
       const { values, errors } = cleanSettingsUpdate(body, { ...ctx.env, ...saved });
       if (errors.length) return ok({ error: errors.join('. ') }, 400);
       await store.saveSettings(values);
+      await ctx.queue?.poke?.(); // e.g. calling resumed, or new hours: look at the queue again
       return ok({ ok: true });
     }
   }

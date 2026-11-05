@@ -90,3 +90,17 @@ test('an "Emailed" column is read as yes/no', () => {
   const r = rowsToLeads([['Business', 'Phone', 'Emailed'], ['A', '5125550100', 'Yes'], ['B', '5125550101', 'no'], ['C', '5125550102', '']], '1');
   assert.deepEqual(r.leads.map((l) => l.emailed), [1, 0, null]);
 });
+
+test('days off and the lunch hour are skipped, on the business\'s own calendar', () => {
+  const c = { ...calling, noCallDates: ['2026-11-26'], lunchBreak: true }; // Thanksgiving
+  const ny = { phone: '+12125550100' };
+  const noonNy = new Date('2026-11-25T17:10:00Z'); // Wed 12:10 EST
+  assert.equal(canCallNow(ny, c, noonNy).ok, false);
+  assert.equal(nextWindowStart(ny, c, noonNy).toISOString(), '2026-11-25T18:00:00.000Z', '1 pm');
+  const wedEvening = new Date('2026-11-25T23:00:00Z');
+  assert.equal(nextWindowStart(ny, c, wedEvening).toISOString(), '2026-11-27T14:00:00.000Z', 'Friday 9 am, not Thanksgiving');
+  // Late Wednesday evening in LA is already Thursday in UTC: the day off follows LA's calendar.
+  const la = { phone: '+13105550100' };
+  assert.equal(canCallNow(la, c, new Date('2026-11-26T00:30:00Z')).ok, true, 'still Wednesday 4:30 pm in LA');
+  assert.equal(canCallNow(la, c, new Date('2026-11-26T18:00:00Z')).ok, false, 'Thursday 10 am in LA');
+});

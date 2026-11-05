@@ -60,3 +60,16 @@ test('leads: paging, safe edits, test calls never touch real businesses', async 
   assert.equal(t.status, 200, JSON.stringify(t.body));
   assert.equal((await app.api('GET', '/api/leads?limit=100')).body.total, 30, 'test lead is hidden from the list');
 });
+
+test('days off must be real dates; spend limit in dollars', async () => {
+  let r = await app.api('PUT', '/api/settings', { NO_CALL_DATES: '2026-12-25, Christmas' });
+  assert.match(r.body.error, /Days off must be dates/);
+  assert.equal((await app.api('PUT', '/api/settings', { NO_CALL_DATES: '2026-12-25\n2027-01-01' })).status, 200);
+  r = await app.api('PUT', '/api/settings', { DAILY_SPEND_LIMIT: '$10' });
+  assert.match(r.body.error, /Daily spend limit/);
+  assert.equal((await app.api('PUT', '/api/settings', { DAILY_SPEND_LIMIT: '7.50', CALLING_PAUSED: 'true' })).status, 200);
+  const s = (await app.api('GET', '/api/status')).body;
+  assert.equal(s.paused, true);
+  assert.equal(s.today.spendLimitCents, 750);
+  assert.equal((await app.api('PUT', '/api/settings', { CALLING_PAUSED: 'false' })).status, 200);
+});

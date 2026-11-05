@@ -236,27 +236,31 @@ export function canCallNow(lead, calling, now = new Date()) {
   if (hour < calling.windowStartHour || hour >= calling.windowEndHour) {
     return { ok: false, reason: `it is ${hour}:00 in ${tz}; calling window is ${calling.windowStartHour}:00-${calling.windowEndHour}:00` };
   }
+  const off = noCallReason(calling, localDate(tz, now));
+  if (off) return { ok: false, reason: off };
+  if (calling.lunchBreak && hour === 12) return { ok: false, reason: `it is lunch time in ${tz}` };
   return { ok: true };
 }
 
-// The next moment (at or after `from`) that falls inside the lead's calling window.
+// The next moment (at or after `from`) that falls inside the lead's calling window, skipping days off
+// and the lunch hour. Times are worked out on the business's own clock, so clock changes don't shift them.
 export function nextWindowStart(lead, calling, from = new Date()) {
-  if (canCallNow(lead, calling, from).ok) return from;
-  const { hour, minute, day } = localTimeInfo(leadTimezone(lead, calling), from);
-  const nowMin = hour * 60 + minute;
-  for (let d = 0; d <= 7; d++) {
-    const weekday = ((day - 1 + d) % 7) + 1;
-    if (!calling.days.includes(weekday)) continue;
-    const ahead = d * 1440 + calling.windowStartHour * 60 - nowMin;
-    if (ahead <= 0) continue;
-    // Counted in minutes from now, the opening is off by an hour if the clocks change in between: correct it.
-    let at = new Date(from.getTime() + ahead * 60000);
-    const there = localTimeInfo(leadTimezone(lead, calling), at);
-    const drift = calling.windowStartHour * 60 - (there.hour * 60 + there.minute);
-    if (drift && Math.abs(drift) <= 120) at = new Date(at.getTime() + drift * 60000);
-    return at;
+  const tz = leadTimezone(lead, calling);
+  let t = from;
+  for (let i = 0; i < 40; i++) {
+    if (canCallNow(lead, calling, t).ok) return t;
+    const { hour, day } = localTimeInfo(tz, t);
+    const ymd = localDate(tz, t);
+    const workday = calling.days.includes(day) && !noCallReason(calling, ymd);
+    if (workday && hour < calling.windowStartHour) t = zonedDate(ymd, calling.windowStartHour, 0, tz);
+    else if (workday && calling.lunchBreak && hour === 12 && hour < calling.windowEndHour) t = zonedDate(ymd, 13, 0, tz);
+    else {
+      // Next day's opening (noon + a day lands on the next calendar day whatever the clocks do).
+      const next = localDate(tz, new Date(zonedDate(ymd, 12, 0, tz).getTime() + 864e5));
+      t = zonedDate(next, calling.windowStartHour, 0, tz);
+    }
   }
-  return new Date(from.getTime() + 24 * 3600 * 1000); // no calling days configured
+  return new Date(from.getTime() + 24 * 3600 * 1000); // nothing open (no calling days configured)
 }
 
 // A day the owner said not to call (holidays), as YYYY-MM-DD on the business's calendar.

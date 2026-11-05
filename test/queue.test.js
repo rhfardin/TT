@@ -144,3 +144,22 @@ test('the daily limit keeps waiting leads in the queue', async () => {
   assert.equal(calls.length, 1);
   assert.ok(await db.get('SELECT * FROM queue_items WHERE lead_id = 1'), 'still queued');
 });
+
+test('paused: the queue waits and manual calls are refused; the spend limit works the same way', async () => {
+  const { ctx } = await setup({ CALLING_PAUSED: 'true' }, [lead(), lead({ phone: '+15125550101', business_name: 'Second' })]);
+  await enqueueLeads(ctx, [1]);
+  let r = await runDue(ctx);
+  assert.equal(r.placed, false);
+  assert.ok(r.waitMs >= 60 * 1000);
+  assert.match((await placeCall(ctx, 2)).error, /paused/);
+  assert.equal(calls.length, 0);
+
+  const spend = await setup({ DAILY_SPEND_LIMIT: '1.50' }, [lead(), lead({ phone: '+15125550101', business_name: 'Second' })]);
+  const id = await spend.store.insertCall(2);
+  await spend.db.run('UPDATE calls SET cost_cents = 151, status = ? WHERE id = ?', 'completed', id);
+  await enqueueLeads(spend.ctx, [1]);
+  r = await runDue(spend.ctx);
+  assert.equal(r.placed, false);
+  assert.match((await placeCall(spend.ctx, 1)).error, /spend limit/);
+  assert.equal(calls.length, 0);
+});

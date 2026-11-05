@@ -62,6 +62,11 @@ export async function placeCall(ctx, leadId, opts = {}) {
     return { ok: false, error: 'this number is on your do-not-call list' };
   }
   if (await store.hasLiveInboundCall(lead.id)) return { ok: false, error: 'they are on a call with us right now' };
+  if (config.calling.paused && !lead.is_test) return { ok: false, error: 'calling is paused (turn it back on with Resume)', limited: true };
+  const limit = config.calling.dailySpendLimitCents;
+  if (limit && !lead.is_test && (await store.spendLast24h()) >= limit) {
+    return { ok: false, error: `daily spend limit reached ($${(limit / 100).toFixed(2)} in 24 hours)`, limited: true };
+  }
   if (!lead.is_test && (await store.callsLast24h()).count >= config.calling.maxCallsPerDay) {
     return { ok: false, error: `daily limit reached (${config.calling.maxCallsPerDay} calls in 24 hours), to protect your number from spam labels`, limited: true };
   }

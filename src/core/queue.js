@@ -92,7 +92,10 @@ export async function runDue(ctx, now = new Date()) {
 // Returns milliseconds to wait, or null if a call may go out now.
 export async function callGate(ctx, now = new Date()) {
   const { store, config } = ctx;
+  if (config.calling.paused) return 5 * 60 * 1000; // checked again now and then; Resume wakes the queue at once
   let wait = 0;
+  const limit = config.calling.dailySpendLimitCents;
+  if (limit && (await store.spendLast24h()) >= limit) wait = 15 * 60 * 1000; // spend drops as older calls age out
   const day = await store.callsLast24h();
   if (day.count >= config.calling.maxCallsPerDay && day.oldest) {
     // Wait until the oldest call of the last 24 hours drops out of the count.

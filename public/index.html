@@ -166,6 +166,7 @@
 
       <div class="queue" id="queueBar" hidden>
         <span id="queueText"></span><span class="spacer"></span>
+        <button class="small" id="pauseQueue">Pause</button>
         <button class="small" id="stopQueue">Stop</button>
       </div>
 
@@ -327,6 +328,10 @@
               <div class="help">Added to numbers without one (1 = US/Canada)</div></div>
             <div><label>Seconds between calls</label><input name="CALL_SPACING_SECONDS" type="number" min="10"></div>
             <div><label>Max tries per business</label><input name="MAX_ATTEMPTS" type="number" min="1"></div>
+            <div><label>Lunch break</label>
+              <select name="LUNCH_BREAK"><option value="false">Off</option><option value="true">On: no calls 12 to 1 pm, their time</option></select></div>
+            <div><label>Days off</label><textarea name="NO_CALL_DATES" rows="2" placeholder="2026-11-26&#10;2026-12-25"></textarea>
+              <div class="help">Holidays: no calls on these dates (YYYY-MM-DD, one per line), on the business's own calendar.</div></div>
           </div>
         </div>
 
@@ -342,6 +347,8 @@
             <div><label>Retry after no answer (hours)</label><input name="RETRY_NO_ANSWER_HOURS" type="number" min="1" max="336">
               <div class="help">For businesses in your call list. Each retry is at a different time of day.</div></div>
             <div><label>Retry after voicemail (hours)</label><input name="RETRY_VOICEMAIL_HOURS" type="number" min="1" max="336"></div>
+            <div><label>Hang up after silence (seconds)</label><input name="SILENCE_SECONDS" type="number" min="0" max="120">
+              <div class="help">If nobody says anything for this long, the AI says goodbye and hangs up. 0 = never.</div></div>
             <div class="full"><label>Record calls</label>
               <select name="RECORD_CALLS"><option value="false">Off</option><option value="true">On: record and play back calls here</option></select>
               <div class="help">When on, the AI says "this call is recorded" at the start. Some states (like California and Florida) require everyone on the call to agree. Twilio charges about $0.0025 per minute.</div></div>
@@ -412,6 +419,8 @@
           <div class="grid">
             <div><label>Calls per day</label><input name="MAX_CALLS_PER_DAY" type="number" min="1" max="1000">
               <div class="help">At most this many calls in any 24 hours. A steady, modest pace (about 50–80 per number) helps keep your number from being marked "Spam Likely".</div></div>
+            <div><label>Daily spend limit ($)</label><input name="DAILY_SPEND_LIMIT" inputmode="decimal" placeholder="0">
+              <div class="help">Calling stops once the estimated cost of the last 24 hours reaches this. 0 = no limit.</div></div>
           </div>
         </div>
 
@@ -651,12 +660,19 @@ async function loadStatus() {
   if (s.providerProblem) $('#setupText').textContent = 'Add your OpenAI key and Twilio details in Settings to start calling.';
 
   const q = s.queue;
-  $('#queueBar').hidden = !q.pending && !q.active;
-  const limited = s.today && s.today.calls >= s.today.limit;
-  $('#queueText').textContent = `${q.active ? 'On a call now. ' : ''}${q.pending} waiting to be called` +
-    (q.pending && q.nextAt && !limited ? `, next ${when(q.nextAt)}` : '') + '. ' +
-    (limited ? `Daily limit reached (${s.today.limit} calls in 24 hours); calling resumes automatically.` : 'Calls go out one at a time, only during calling hours.') +
-    (s.today ? ` ${s.today.calls} of ${s.today.limit} calls today.` : '');
+  const t = s.today;
+  paused = s.paused;
+  $('#queueBar').hidden = !q.pending && !q.active && !s.paused;
+  const limited = t.calls >= t.limit;
+  const overSpend = t.spendLimitCents > 0 && t.spentCents >= t.spendLimitCents;
+  $('#queueText').textContent = (s.paused ? 'Calling is paused. ' : '') + `${q.active ? 'On a call now. ' : ''}${q.pending} waiting to be called` +
+    (q.pending && q.nextAt && !limited && !overSpend && !s.paused ? `, next ${when(q.nextAt)}` : '') + '. ' +
+    (limited ? `Daily limit reached (${t.limit} calls in 24 hours); calling resumes automatically.`
+      : overSpend ? `Daily spend limit reached (${money(t.spendLimitCents)}); calling resumes automatically.`
+        : s.paused ? '' : 'Calls go out one at a time, only during calling hours.') +
+    ` ${t.calls} of ${t.limit} calls today` + (t.spendLimitCents ? `, ${money(t.spentCents)} of ${money(t.spendLimitCents)} spent.` : '.');
+  $('#pauseQueue').textContent = s.paused ? 'Resume' : 'Pause';
+  $('#pauseQueue').classList.toggle('primary', s.paused);
 }
 $('#stats').onclick = (e) => {
   const b = e.target.closest('[data-group]');
@@ -755,6 +771,14 @@ $('#campaignForm').onsubmit = async (e) => {
     toast(`${queued} added to the call list.` + (skipped.length ? ` ${skipped.length} skipped (${skipped[0].reason}).` : ''));
     selected.clear();
   } catch (err) { toast('Not added: ' + err.message); }
+  refresh();
+};
+let paused = false;
+$('#pauseQueue').onclick = async () => {
+  try {
+    await api('/api/settings', { method: 'PUT', body: JSON.stringify({ CALLING_PAUSED: paused ? 'false' : 'true' }) });
+    toast(paused ? 'Calling resumed.' : 'Paused. A call in progress will finish; nothing new goes out until you resume.');
+  } catch (err) { toast(err.message); }
   refresh();
 };
 $('#stopQueue').onclick = async () => {
@@ -922,7 +946,7 @@ $('#days').innerHTML = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const DEFAULTS = { OPENAI_REALTIME_MODEL: 'gpt-realtime-mini', OPENAI_VOICE: 'marin', CALL_WINDOW_START: '9', CALL_WINDOW_END: '17',
   CALL_DAYS: '1,2,3,4,5', DEFAULT_TIMEZONE: 'America/New_York', DEFAULT_COUNTRY_CODE: '1', CALL_SPACING_SECONDS: '90', MAX_ATTEMPTS: '3', AGENT_NAME: 'Alex',
   AMD_ENABLED: 'true', MAX_CALL_SECONDS: '420', RETRY_NO_ANSWER_HOURS: '24', RETRY_VOICEMAIL_HOURS: '48', RECORD_CALLS: 'false',
-  TRANSFER_ENABLED: 'false', FOLLOWUP_DAYS: '0', MAX_CALLS_PER_DAY: '80' };
+  TRANSFER_ENABLED: 'false', FOLLOWUP_DAYS: '0', MAX_CALLS_PER_DAY: '80', SILENCE_SECONDS: '20', LUNCH_BREAK: 'false', DAILY_SPEND_LIMIT: '0' };
 
 let loadedSettings = {};
 async function loadDnc() {

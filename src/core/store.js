@@ -279,6 +279,9 @@ export function createStore(db) {
     applyDnc: () => db.run("UPDATE leads SET status = 'dnc' WHERE status NOT IN ('dnc', 'calling') AND phone IN (SELECT phone FROM dnc_numbers)"),
 
     // ---- Daily call limit (outbound calls in the last 24 hours, test calls left out) ----
+    // Estimated spend of every call in the last 24 hours, in cents (test calls cost money too).
+    spendLast24h: async () => (await db.get('SELECT COALESCE(SUM(cost_cents), 0) AS c FROM calls WHERE created_at >= datetime(?)',
+      new Date(Date.now() - 864e5).toISOString())).c,
     async callsLast24h() {
       const r = await db.get(`SELECT COUNT(*) AS n, MIN(c.created_at) AS oldest FROM calls c JOIN leads l ON l.id = c.lead_id
                               WHERE c.direction = 'outbound' AND l.is_test = 0 AND c.created_at >= datetime(?)`,

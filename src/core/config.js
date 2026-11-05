@@ -98,6 +98,14 @@ export function buildConfig(e) {
       spacingSeconds: num('CALL_SPACING_SECONDS', 90, 0, 3600),
       maxAttempts: num('MAX_ATTEMPTS', 3, 1, 10),
       maxCallSeconds: num('MAX_CALL_SECONDS', 420, 60, 1800),
+      // One switch that stops all calling (test calls still work).
+      paused: env('CALLING_PAUSED', 'false') === 'true',
+      // Days off (holidays), on the business's calendar: YYYY-MM-DD, separated by commas or new lines.
+      noCallDates: env('NO_CALL_DATES').split(/[\s,;]+/).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)),
+      // No calls from 12 to 1 pm, their time (owners are out or eating).
+      lunchBreak: env('LUNCH_BREAK', 'false') === 'true',
+      // Stop placing calls once the estimated spend of the last 24 hours reaches this (in cents; 0 = no limit).
+      dailySpendLimitCents: Math.max(0, Math.round((Number(env('DAILY_SPEND_LIMIT', '0')) || 0) * 100)),
       // Dead air: nobody says anything for this long → the AI says goodbye and hangs up (0 = off).
       silenceSeconds: num('SILENCE_SECONDS', 20, 0, 120),
       // Calls per 24 hours from one number. A steady, modest pace keeps it from being marked "Spam Likely".

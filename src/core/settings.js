@@ -37,6 +37,10 @@ export const SETTINGS = [
   { key: 'MAX_CALL_SECONDS' },
   { key: 'MAX_CALLS_PER_DAY' },
   { key: 'SILENCE_SECONDS' },
+  { key: 'CALLING_PAUSED' },
+  { key: 'NO_CALL_DATES' },
+  { key: 'LUNCH_BREAK' },
+  { key: 'DAILY_SPEND_LIMIT' },
   { key: 'AMD_ENABLED' },
   { key: 'RETRY_NO_ANSWER_HOURS' },
   { key: 'RETRY_VOICEMAIL_HOURS' },
@@ -76,6 +80,13 @@ const VALIDATE = {
   MAX_CALL_SECONDS: int(60, 1800),
   MAX_CALLS_PER_DAY: int(1, 1000),
   SILENCE_SECONDS: int(0, 120),
+  CALLING_PAUSED: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
+  LUNCH_BREAK: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
+  NO_CALL_DATES: (v) => {
+    const bad = v.split(/[\s,;]+/).filter((d) => d && !(/^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d))));
+    return bad.length ? `must be dates like 2026-12-25 (not "${bad[0]}")` : null;
+  },
+  DAILY_SPEND_LIMIT: (v) => (/^\d{1,4}(\.\d{1,2})?$/.test(v) ? null : 'must be an amount in dollars, like 10 or 7.50 (0 = no limit)'),
   RETRY_NO_ANSWER_HOURS: int(1, 336),
   RETRY_VOICEMAIL_HOURS: int(1, 336),
   AMD_ENABLED: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
@@ -94,6 +105,7 @@ const LABELS = {
   TWILIO_FROM_NUMBER: 'Twilio phone number', MAX_CALL_SECONDS: 'Max call length', RETRY_NO_ANSWER_HOURS: 'Retry after no answer',
   RETRY_VOICEMAIL_HOURS: 'Retry after voicemail', AMD_ENABLED: 'Voicemail detection', RECORD_CALLS: 'Record calls',
   TRANSFER_ENABLED: 'Live transfer', TRANSFER_PHONE: 'Your phone for transfers', MAX_CALLS_PER_DAY: 'Calls per day', SILENCE_SECONDS: 'Hang up after silence',
+  CALLING_PAUSED: 'Pause all calling', NO_CALL_DATES: 'Days off', LUNCH_BREAK: 'Lunch break', DAILY_SPEND_LIMIT: 'Daily spend limit',
   CALCOM_USERNAME: 'Cal.com username', CALCOM_EVENT_SLUG: 'Cal.com event',
   ALERT_EMAIL: 'Alert email', FOLLOWUP_DAYS: 'Follow-up email',
 };
