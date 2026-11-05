@@ -3,11 +3,15 @@
 import { checkLead, nextWindowStart } from './leads.js';
 import { placeCall, providerProblem } from './actions.js';
 
-const MAX_ITEMS_PER_RUN = 6; // keeps one run well inside Cloudflare's per-request query limit
+const MAX_ITEMS_PER_RUN = 4; // keeps one run inside Cloudflare's 50-queries-per-request limit (Free plan)
+
+// How long a call can possibly be going on (the AI's time limit plus a margin).
+export const callWindowMs = (config) => (config.calling.maxCallSeconds + 10 * 60) * 1000;
 
 export async function enqueueLeads(ctx, idList, { ignoreWindow = false, now = new Date(), campaignId = null } = {}) {
   const { store, config } = ctx;
   const unique = [...new Set(idList.map(Number).filter(Number.isFinite))].slice(0, 5000);
+  await store.dropStoppedQueueItems(unique); // left over from a stopped campaign: free to queue again
   const leads = new Map((await store.getLeadsByIds(unique)).map((l) => [l.id, l]));
   const waiting = new Set(await store.queuedLeadIds(unique));
   const blocked = new Set(await store.dncLeadIds(unique));
@@ -25,8 +29,7 @@ export async function enqueueLeads(ctx, idList, { ignoreWindow = false, now = ne
   }
   if (accepted.length) {
     await store.enqueueMany(accepted, now.toISOString(), ignoreWindow, campaignId ? 'campaign' : 'manual', campaignId);
-    if (campaignId) await store.setLeadsCampaign(accepted, campaignId);
-    else await store.markInCampaign(accepted);
+    await store.setLeadsCampaign(accepted, campaignId); // a manual batch belongs to no campaign
   }
   return results;
 }
@@ -35,20 +38,24 @@ export async function enqueueLeads(ctx, idList, { ignoreWindow = false, now = ne
 export async function runDue(ctx, now = new Date()) {
   const { store, config } = ctx;
   await store.releaseStaleClaims(new Date(now.getTime() - 10 * 60 * 1000).toISOString());
-  if (providerProblem(config)) return { placed: false, waitMs: 60 * 1000 }; // keep the queue until keys are added
-  if ((await store.activeCallCount()) > 0) return { placed: false, waitMs: 20 * 1000 };
-  // Daily limit reached: wait until the oldest call of the last 24 hours drops out of the count.
-  const day = await store.callsLast24h();
-  if (day.count >= config.calling.maxCallsPerDay) {
-    const frees = Date.parse(`${day.oldest.replace(' ', 'T')}Z`) + 864e5;
-    return { placed: false, waitMs: Math.max(60 * 1000, frees - now.getTime()) };
+  if (providerProblem(config)) {
+    // Keep the queue until the keys or address are fixed; nothing to wake up for if it's empty.
+    return { placed: false, waitMs: (await store.queueStats()).pending ? 60 * 1000 : null };
   }
+  if ((await store.activeCallCount(callWindowMs(config))) > 0) return { placed: false, waitMs: 20 * 1000 };
+  const gate = await callGate(ctx, now);
+  if (gate) return { placed: false, waitMs: gate };
 
   for (let i = 0; i < MAX_ITEMS_PER_RUN; i++) {
     const item = await store.nextDueItem(now.toISOString());
     if (!item) break;
     if (!(await store.claimQueueItem(item.id))) continue;
     const lead = await store.getLead(item.lead_id);
+    if (lead?.status === 'calling') {
+      // Still on an earlier call: try again shortly instead of dropping them.
+      await store.rescheduleQueueItem(item.id, new Date(now.getTime() + 2 * 60 * 1000).toISOString());
+      continue;
+    }
     const check = checkLead(lead, config.calling, { ignoreWindow: Boolean(item.ignore_window), now });
     if (!check.ok) {
       if (lead && checkLead(lead, config.calling, { ignoreWindow: true }).ok) {
@@ -61,10 +68,15 @@ export async function runDue(ctx, now = new Date()) {
       continue;
     }
     const r = await placeCall(ctx, lead.id, { ignoreWindow: true, campaignId: item.campaign_id });
+    if (r.limited) {
+      // A limit was reached meanwhile: keep their place in the queue and wait.
+      await store.rescheduleQueueItem(item.id, now.toISOString());
+      return { placed: false, waitMs: (await callGate(ctx, now)) ?? 60 * 1000 };
+    }
     await store.deleteQueueItem(item.id);
     if (!r.ok) {
       await store.logEvent(lead.id, 'queue_skip', r.error);
-      continue;
+      break; // one failed call per run, so a Twilio problem can't burn through the whole list at once
     }
     return { placed: true, waitMs: config.calling.spacingSeconds * 1000 };
   }
@@ -74,9 +86,28 @@ export async function runDue(ctx, now = new Date()) {
   return { placed: false, waitMs: Math.max(1000, Date.parse(nextAt) - now.getTime()) };
 }
 
+// Reasons the next call has to wait, whatever is queued: the gap between calls and the daily limit.
+// Returns milliseconds to wait, or null if a call may go out now.
+export async function callGate(ctx, now = new Date()) {
+  const { store, config } = ctx;
+  let wait = 0;
+  const day = await store.callsLast24h();
+  if (day.count >= config.calling.maxCallsPerDay && day.oldest) {
+    // Wait until the oldest call of the last 24 hours drops out of the count.
+    const frees = Date.parse(`${day.oldest.replace(' ', 'T')}Z`) + 864e5;
+    wait = Math.max(60 * 1000, frees - now.getTime());
+  }
+  const last = await store.lastOutboundCallAt();
+  if (last) {
+    const since = now.getTime() - Date.parse(`${last.replace(' ', 'T')}Z`);
+    wait = Math.max(wait, config.calling.spacingSeconds * 1000 - since);
+  }
+  return wait > 0 ? wait : null;
+}
+
 export async function queueState(ctx) {
   const stats = await ctx.store.queueStats();
-  return { ...stats, active: await ctx.store.activeCallCount() };
+  return { ...stats, active: await ctx.store.activeCallCount(callWindowMs(ctx.config)) };
 }
 
 export async function clearQueue(ctx) {

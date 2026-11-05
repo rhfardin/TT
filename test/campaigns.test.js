@@ -3,7 +3,7 @@ import { test, after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { startApp, waitFor, sleep } from './fakes.js';
 
-const app = await startApp({ AMD_ENABLED: 'false', CALL_SPACING_SECONDS: '10' });
+const app = await startApp({ AMD_ENABLED: 'false', CALL_SPACING_SECONDS: '1' });
 after(() => app.stop());
 before(async () => assert.equal((await app.api('POST', '/api/login', { password: 'pw' })).status, 200));
 

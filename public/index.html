@@ -33,7 +33,7 @@
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
   header { background: var(--panel); border-bottom: 1px solid var(--line); }
-  .bar { max-width: 1100px; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; gap: 6px; }
+  .bar { max-width: 1100px; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .logo { font-weight: 700; font-size: 17px; margin-right: 14px; white-space: nowrap; }
   .tab { border: 0; background: none; padding: 8px 12px; color: var(--muted); }
   .tab.active { color: var(--text); background: var(--soft); }
@@ -108,6 +108,7 @@
   .camp { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
   .camp:first-child { border-top: 0; }
   .progress { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 6px; }
+  .dnc-row { display: flex; gap: 10px; align-items: center; padding: 4px 0; border-top: 1px solid var(--line); }
   .progress > span { display: block; height: 100%; background: var(--accent); }
   #toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 10px; display: none; max-width: 90vw; z-index: 10; }
 
@@ -233,11 +234,11 @@
           <h2>1. Phone and AI voice</h2>
           <p class="muted" style="margin:0">Required. These are kept on your server and never shown again after saving.</p>
           <div class="grid">
-            <div class="full"><label>OpenAI API key</label><input name="OPENAI_API_KEY" type="password" autocomplete="off">
+            <div class="full"><label>OpenAI API key</label><input name="OPENAI_API_KEY" type="password" autocomplete="new-password">
               <div class="help">platform.openai.com → API keys. Add at least $5 credit.</div></div>
             <div><label>Twilio Account SID</label><input name="TWILIO_ACCOUNT_SID" autocomplete="off" placeholder="AC…">
               <div class="help">twilio.com console home page</div></div>
-            <div><label>Twilio Auth Token</label><input name="TWILIO_AUTH_TOKEN" type="password" autocomplete="off"></div>
+            <div><label>Twilio Auth Token</label><input name="TWILIO_AUTH_TOKEN" type="password" autocomplete="new-password"></div>
             <div><label>Twilio phone number</label><input name="TWILIO_FROM_NUMBER" placeholder="+15551234567">
               <div class="help">The number the calls come from</div></div>
             <div><label>Voice quality</label>
@@ -304,7 +305,7 @@
           <h2>4. Follow-up email</h2>
           <p class="muted" style="margin:0">The AI emails the redesign link during the call. Free with <a href="https://resend.com" target="_blank" rel="noopener">Resend</a> (verify your domain there).</p>
           <div class="grid">
-            <div><label>Resend API key</label><input name="RESEND_API_KEY" type="password" autocomplete="off" placeholder="re_…"></div>
+            <div><label>Resend API key</label><input name="RESEND_API_KEY" type="password" autocomplete="new-password" placeholder="re_…"></div>
             <div><label>Send from</label><input name="EMAIL_FROM" placeholder="Your Name <you@yourdomain.com>"></div>
           </div>
         </div>
@@ -363,7 +364,7 @@
           <h2>8. Booking calls with you (Cal.com)</h2>
           <p class="muted" style="margin:0">When an owner wants to talk it through, the AI offers real open times from your Cal.com calendar and books the call during the conversation. Cal.com emails them the invite. Without this, the AI arranges a callback instead.</p>
           <div class="grid">
-            <div class="full"><label>Cal.com API key</label><input name="CALCOM_API_KEY" type="password" autocomplete="off" placeholder="cal_live_…">
+            <div class="full"><label>Cal.com API key</label><input name="CALCOM_API_KEY" type="password" autocomplete="new-password" placeholder="cal_live_…">
               <div class="help">Cal.com → Settings → Developer → API Keys</div></div>
             <div><label>Username</label><input name="CALCOM_USERNAME" placeholder="fardin">
               <div class="help">The part after cal.com/ in your booking link</div></div>
@@ -407,6 +408,7 @@
           <label style="margin-top:12px">Add numbers <span class="help">one per line, or separated by commas</span></label>
           <textarea id="dncNumbers" placeholder="(512) 555-0100&#10;+1 305 555 0100"></textarea>
           <div class="row" style="margin-top:8px"><button type="button" id="addDnc">Add to the list</button><span id="dncResult" class="muted"></span></div>
+          <div id="dncList"></div>
           <div class="grid">
             <div><label>Calls per day</label><input name="MAX_CALLS_PER_DAY" type="number" min="1" max="1000">
               <div class="help">At most this many calls in any 24 hours. A steady, modest pace (about 50–80 per number) helps keep your number from being marked "Spam Likely".</div></div>
@@ -496,10 +498,12 @@ $('#logout').onclick = async () => { await api('/api/logout', { method: 'POST' }
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   for (const t of ['leads', 'results', 'script', 'settings']) $(`#tab-${t}`).hidden = name !== t;
-  if (name === 'settings') loadSettings();
+  if (name === 'settings' && !settingsDirty) loadSettings();
   if (name === 'results') loadResults();
-  if (name === 'script') loadScript();
+  if (name === 'script' && !scriptDirty) loadScript();
 }
+let settingsDirty = false;
+let scriptDirty = false;
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-tab],[data-goto]');
   if (t) showTab(t.dataset.tab || t.dataset.goto);
@@ -547,6 +551,7 @@ async function loadCampaigns() {
       ${c.status === 'running' && !finished ? `<button class="small" data-camp="${c.id}" data-act="pause">Pause</button>` : ''}
       ${c.status === 'paused' ? `<button class="small primary" data-camp="${c.id}" data-act="resume">Resume</button>` : ''}
       ${c.status !== 'stopped' && !finished ? `<button class="small" data-camp="${c.id}" data-act="stop">Stop</button>` : ''}
+      ${c.status === 'stopped' || finished ? `<button class="small" data-camp="${c.id}" data-act="dismiss">Dismiss</button>` : ''}
     </div>`;
   }).join('');
 }
@@ -554,7 +559,7 @@ $('#campaignList').onclick = async (e) => {
   const b = e.target.closest('[data-camp]');
   if (!b) return;
   if (b.dataset.act === 'stop' && !confirm('Stop this campaign? Businesses still waiting in it won\'t be called.')) return;
-  await api(`/api/campaigns/${b.dataset.camp}/${b.dataset.act}`, { method: 'POST', body: '{}' });
+  try { await api(`/api/campaigns/${b.dataset.camp}/${b.dataset.act}`, { method: 'POST', body: '{}' }); } catch (err) { toast(err.message); }
   refresh();
 };
 
@@ -608,6 +613,8 @@ $('#bulkStatus').onchange = async () => {
 };
 
 let scriptDefault = '';
+$('#scriptA').addEventListener('input', () => (scriptDirty = true));
+$('#scriptB').addEventListener('input', () => (scriptDirty = true));
 async function loadScript() {
   const r = await api('/api/script');
   scriptDefault = r.default;
@@ -617,6 +624,7 @@ async function loadScript() {
 async function saveScript(key, value, out) {
   try {
     await api('/api/settings', { method: 'PUT', body: JSON.stringify({ [key]: value }) });
+    scriptDirty = false;
     $(out).textContent = 'Saved. The next call uses it.';
   } catch (err) { $(out).textContent = err.message; }
 }
@@ -669,6 +677,8 @@ async function loadLeads(more = false) {
   if (seq !== leadsSeq) return;
   leads = more ? leads.concat(r.leads) : r.leads;
   totalLeads = r.total;
+  const shownIds = new Set(leads.map((l) => l.id));
+  for (const id of selected) if (!shownIds.has(id)) selected.delete(id);
   render();
 }
 
@@ -688,7 +698,7 @@ function render() {
       <div class="item" data-id="${l.id}">
         <input type="checkbox" class="sel" data-id="${l.id}" ${selected.has(l.id) ? 'checked' : ''}>
         <div><div class="name">${esc(l.business_name)}</div><div class="sub">${esc([l.category, l.city].filter(Boolean).join(' · '))}</div></div>
-        <div class="c-phone">${esc(l.phone)}</div>
+        <div class="c-phone">${l.phone.startsWith('hidden:') ? 'Hidden number' : esc(l.phone)}</div>
         <div class="c-status">${leadPill(l)}</div>
         <div class="c-summary summary">${esc(l.last_summary || '')}</div>
         <div><button class="small" data-call="${l.id}">Call</button></div>
@@ -723,8 +733,7 @@ async function callOne(id, { name, resetTries = false } = {}) {
   name ??= (leads.find((l) => l.id === id) || {}).business_name;
   if (!confirm(`Call ${name || 'this business'} now?`)) return;
   try {
-    if (resetTries) await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ attempts: 0 }) });
-    await api(`/api/leads/${id}/call`, { method: 'POST', body: '{}' });
+    await api(`/api/leads/${id}/call`, { method: 'POST', body: JSON.stringify({ resetTries }) });
     toast('Calling… the result shows up here when the call ends.');
   } catch (err) { toast('Not called: ' + err.message); }
   refresh();
@@ -810,14 +819,31 @@ function sheetRows(wb) {
 
 // ---------- One business ----------
 let liveTimer;
-async function openLead(id) {
+let drawerSeq = 0;
+let drawerId = null;
+// refreshing: a live update of the business already shown (skipped if it was closed or is being edited).
+async function openLead(id, { refreshing = false } = {}) {
   clearTimeout(liveTimer);
-  const { lead, calls } = await api(`/api/leads/${id}`);
+  const seq = ++drawerSeq;
+  const drawer = $('#drawer');
+  if (refreshing && (!drawer.classList.contains('open') || drawerId !== id)) return;
+  let data;
+  try { data = await api(`/api/leads/${id}`); } catch (err) { if (!refreshing) toast(err.message); return; }
+  if (seq !== drawerSeq || (refreshing && !drawer.classList.contains('open'))) return;
+  const { lead, calls } = data;
+  const hidden = String(lead.phone).startsWith('hidden:');
+  const editing = drawerId === id && $('#dEditForm') && !$('#dEditForm').hidden;
+  const openDetails = drawerId === id ? new Set([...drawer.querySelectorAll('details[data-call]')].filter((d) => d.open).map((d) => d.dataset.call)) : new Set();
+  drawerId = id;
   const live = calls[0] && ['ringing', 'in_progress', 'transferring'].includes(calls[0].status);
   const link = (u) => u ? `<a href="${esc(/^https?:/.test(u) ? u : 'https://' + u)}" target="_blank" rel="noopener">${esc(u)}</a>` : '';
-  const rows = [['Owner', esc(lead.contact_name)], ['Phone', esc(lead.phone)], ['Email', esc(lead.email)],
+  const rows = [['Owner', esc(lead.contact_name)], ['Phone', hidden ? 'Hidden number' : esc(lead.phone)], ['Email', esc(lead.email)],
     ['Website', link(lead.website)], ['Redesign', link(lead.demo_link)], ['Category', esc(lead.category)],
     ['City', esc(lead.city)], ['Follow up', esc(lead.meeting_time)], ['Notes', esc(lead.notes)]].filter((r) => r[1]);
+  if (editing) {
+    if (live) liveTimer = setTimeout(() => openLead(id, { refreshing: true }), 2000);
+    return;
+  }
   $('#drawer').innerHTML = `
     <div class="row"><h2 style="margin:0;flex:1">${esc(lead.business_name)}</h2><button class="small" id="closeDrawer">Close</button></div>
     <div style="margin-top:8px">${pill(lead.status)} <span class="muted">${Number(lead.attempts)} call${lead.attempts === 1 ? '' : 's'} so far</span></div>
@@ -830,7 +856,7 @@ async function openLead(id) {
       <button class="small" id="dDelete" style="margin-left:auto">Delete</button>
     </div>
     <form class="card edit" id="dEditForm" hidden>
-      ${[['contact_name', 'Owner / contact'], ['phone', 'Phone'], ['email', 'Email'], ['website', 'Website'], ['demo_link', 'Redesign link'],
+      ${[['business_name', 'Business name'], ...(hidden ? [] : [['phone', 'Phone']]), ['contact_name', 'Owner / contact'], ['email', 'Email'], ['website', 'Website'], ['demo_link', 'Redesign link'],
         ['category', 'Category'], ['city', 'City'], ['timezone', 'Timezone (e.g. America/Chicago)'], ['meeting_time', 'Follow up']]
         .map(([k, l]) => `<label>${l}</label><input name="${k}" value="${esc(lead[k] || '')}">`).join('')}
       <label>Notes</label><textarea name="notes">${esc(lead.notes || '')}</textarea>
@@ -852,10 +878,10 @@ async function openLead(id) {
         ${c.summary ? `<p>${esc(c.summary)}</p>` : ''}
         ${c.outcome?.next_step ? `<p><b>Next step:</b> ${esc(c.outcome.next_step)}</p>` : ''}
         ${c.outcome?.requests ? `<p><b>They asked for:</b> ${esc(c.outcome.requests)}</p>` : ''}
-        ${c.transcript.length ? `<details><summary>Read the conversation</summary>${c.transcript.map((t) => `<div class="bubble ${t.role}">${esc(t.message)}</div>`).join('')}</details>` : ''}
+        ${c.transcript.length ? `<details data-call="${Number(c.id)}" ${openDetails.has(String(c.id)) ? 'open' : ''}><summary>Read the conversation</summary>${c.transcript.map((t) => `<div class="bubble ${t.role}">${esc(t.message)}</div>`).join('')}</details>` : ''}
       </div>`).join('') || '<p class="muted">Not called yet.</p>'}`;
   $('#drawer').classList.add('open');
-  $('#closeDrawer').onclick = () => { clearTimeout(liveTimer); $('#drawer').classList.remove('open'); };
+  $('#closeDrawer').onclick = () => { clearTimeout(liveTimer); drawerSeq++; drawerId = null; $('#drawer').classList.remove('open'); };
   $('#dCall').onclick = async () => { await callOne(id, { name: lead.business_name, resetTries: true }); openLead(id); };
   $('#dStatus').onchange = async () => {
     try {
@@ -867,21 +893,23 @@ async function openLead(id) {
   $('#dDelete').onclick = async () => {
     if (!confirm('Delete this business and its call history?')) return;
     await api(`/api/leads/${id}`, { method: 'DELETE' });
+    drawerSeq++; drawerId = null;
     $('#drawer').classList.remove('open'); refresh();
   };
   $('#dEdit').onclick = () => { $('#dEditForm').hidden = false; };
-  $('#dEditCancel').onclick = () => { $('#dEditForm').hidden = true; };
+  $('#dEditCancel').onclick = () => { $('#dEditForm').hidden = true; openLead(id); };
   $('#dEditForm').onsubmit = async (e) => {
     e.preventDefault();
     try {
       await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify(Object.fromEntries(new FormData(e.target))) });
       toast('Saved');
+      $('#dEditForm').hidden = true;
       openLead(id);
       refresh();
     } catch (err) { toast(err.message); }
   };
   // While a call is going on, keep the conversation updating.
-  if (live) liveTimer = setTimeout(() => { if ($('#drawer').classList.contains('open') && $('#dEditForm').hidden) openLead(id); }, 2000);
+  if (live) liveTimer = setTimeout(() => openLead(id, { refreshing: true }), 2000);
 }
 
 // ---------- Settings ----------
@@ -900,11 +928,21 @@ let loadedSettings = {};
 async function loadDnc() {
   const r = await api('/api/dnc');
   $('#dncResult').textContent = `${r.count} numbers on the list.`;
+  $('#dncList').innerHTML = r.recent.length ? `<p class="muted" style="margin:10px 0 4px">Most recent:</p>` + r.recent.map((d) => `
+    <div class="dnc-row"><span style="flex:1">${esc(d.phone)} <span class="muted">· ${esc(d.source || '')}</span></span>
+      <button type="button" class="small" data-undnc="${esc(d.phone)}">Remove</button></div>`).join('') : '';
 }
+$('#dncList').onclick = async (e) => {
+  const b = e.target.closest('[data-undnc]');
+  if (!b || !confirm(`Take ${b.dataset.undnc} off the do-not-call list? They can be called again.`)) return;
+  try { await api(`/api/dnc/${encodeURIComponent(b.dataset.undnc)}`, { method: 'DELETE' }); } catch (err) { toast(err.message); }
+  loadDnc();
+};
 $('#addDnc').onclick = async () => {
   try {
     const r = await api('/api/dnc', { method: 'POST', body: JSON.stringify({ numbers: $('#dncNumbers').value }) });
     $('#dncNumbers').value = '';
+    await loadDnc();
     $('#dncResult').textContent = `Added ${r.added}${r.invalid ? ` (${r.invalid} weren't valid numbers)` : ''}. ${r.count} numbers on the list.`;
   } catch (err) { $('#dncResult').textContent = err.message; }
 };
@@ -915,12 +953,24 @@ async function loadSettings() {
   const s = await api('/api/settings');
   const form = $('#settingsForm');
   loadedSettings = {};
+  settingsDirty = false;
+  form.querySelectorAll('.remove-secret').forEach((b) => b.remove());
   for (const [key, value] of Object.entries(s)) {
     const el = form.elements[key];
     if (!el) continue;
     if (typeof value === 'object') { // secret: never shown, only whether it's set
       el.value = '';
       el.placeholder = value.set ? `Saved (${value.hint}). Leave empty to keep it.` : 'Not set yet';
+      if (value.set) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'small remove-secret'; b.textContent = 'Remove saved key'; b.style.marginTop = '6px';
+        b.onclick = async () => {
+          if (!confirm('Remove this saved key? Features that need it stop working until you add one again.')) return;
+          try { await api('/api/settings', { method: 'PUT', body: JSON.stringify({ [key]: null }) }); toast('Removed'); loadSettings(); loadStatus(); }
+          catch (err) { toast(err.message); }
+        };
+        el.after(b);
+      }
       continue;
     }
     const v = value || DEFAULTS[key] || '';
@@ -934,6 +984,8 @@ async function loadSettings() {
   loadedSettings.CALL_DAYS = days.join(',');
 }
 
+$('#settingsForm').addEventListener('input', () => (settingsDirty = true));
+$('#settingsForm').addEventListener('change', () => (settingsDirty = true));
 $('#settingsForm').onsubmit = async (e) => {
   e.preventDefault();
   const all = Object.fromEntries(new FormData(e.target));
@@ -966,6 +1018,9 @@ $('#setupInbound').onclick = async () => {
 };
 
 $('#testCall').onclick = async () => {
+  if ($('#testCall').disabled) return;
+  $('#testCall').disabled = true;
+  setTimeout(() => ($('#testCall').disabled = false), 15000);
   $('#testResult').textContent = 'Calling…';
   try {
     const r = await api('/api/test-call', { method: 'POST', body: JSON.stringify({ phone: $('#testPhone').value, business_name: $('#testBusiness').value }) });
@@ -976,14 +1031,26 @@ $('#testCall').onclick = async () => {
 
 // ---------- Start ----------
 function refresh() { return Promise.all([loadStatus(), loadLeads(), loadNeedsYou(), loadCampaigns()]).catch(() => {}); }
+// Links in alert emails: /#lead-12 opens that business.
+function openFromHash() {
+  const m = location.hash.match(/^#lead-(\d+)$/);
+  if (m && !$('#app').hidden) openLead(Number(m[1]));
+}
+window.addEventListener('hashchange', openFromHash);
 async function start() {
   $('#login').hidden = true; $('#app').hidden = false;
   await refresh();
-  // Links in alert emails: /#lead-12 opens that business.
-  const m = location.hash.match(/^#lead-(\d+)$/);
-  if (m) openLead(Number(m[1]));
+  openFromHash();
 }
-api('/api/status').then(start).catch(() => showLogin());
+function firstLoad() {
+  api('/api/status').then(start).catch((err) => {
+    if (!$('#login').hidden) return; // 401: the login form is showing
+    $('#loginErr').textContent = '';
+    document.body.insertAdjacentHTML('afterbegin', `<div class="card banner" id="loadErr" style="max-width:600px;margin:40px auto">
+      <span>Couldn't reach the server: ${esc(err.message)}</span><button class="small" onclick="this.parentNode.remove();firstLoad()">Try again</button></div>`);
+  });
+}
+firstLoad();
 setInterval(() => { if (!$('#app').hidden && !$('#tab-leads').hidden) refresh(); }, 8000);
 </script>
 </body>

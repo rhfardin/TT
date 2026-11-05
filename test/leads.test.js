@@ -70,6 +70,16 @@ test('nextWindowStart skips the weekend', () => {
   assert.equal(nextWindowStart({ phone: '+12125550100' }, calling, fridayEvening).toISOString(), '2026-11-09T14:00:00.000Z');
 });
 
+test('"EST" in the sheet means New York time, with daylight saving', () => {
+  assert.equal(leadTimezone({ phone: '+13105550100', timezone: 'EST' }, calling), 'America/New_York');
+  assert.equal(leadTimezone({ phone: '+13105550100', timezone: 'PST' }, calling), 'America/Los_Angeles');
+});
+
+test('nextWindowStart is right when the clocks change over the weekend', () => {
+  const fridayEvening = new Date('2026-10-30T22:00:00Z'); // Fri 18:00 EDT; clocks go back Sun Nov 1
+  assert.equal(nextWindowStart({ phone: '+12125550100' }, calling, fridayEvening).toISOString(), '2026-11-02T14:00:00.000Z'); // Mon 9:00 EST
+});
+
 test('checkLead stops final statuses and max attempts', () => {
   assert.equal(checkLead({ status: 'dnc', attempts: 0 }, calling, { ignoreWindow: true }).ok, false);
   assert.equal(checkLead({ status: 'new', attempts: 3 }, calling, { ignoreWindow: true }).ok, false);

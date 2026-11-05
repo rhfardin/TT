@@ -66,7 +66,7 @@ export async function sendDueFollowups(ctx) {
   const s = config.seller;
   let sent = 0;
   for (const lead of await store.dueFollowups(new Date().toISOString())) {
-    const done = ['won', 'dnc', 'not_interested'].includes(lead.status) || (lead.handled_at && lead.handled_at > lead.followup_due_at);
+    const done = ['won', 'dnc', 'not_interested'].includes(lead.status) || (lead.handled_at && lead.hot_at && lead.handled_at >= lead.hot_at);
     if (done || !lead.email || !lead.demo_link) {
       await store.updateLead(lead.id, { followup_sent_at: 'skipped' });
       continue;
@@ -93,6 +93,8 @@ export async function sendDueFollowups(ctx) {
       sent++;
     } catch (err) {
       await store.logEvent(lead.id, 'followup_failed', err.message);
+      // Give up after 3 tries so one bad address can't hold up everyone else's follow-up.
+      if ((await store.countEvents(lead.id, 'followup_failed')) >= 3) await store.updateLead(lead.id, { followup_sent_at: 'failed' });
     }
   }
   return sent;

@@ -180,8 +180,9 @@ function formatter(tz) {
 export const isValidTimezone = (tz) => Boolean(tz) && formatter(tz) !== null;
 
 // Sheet value ("America/Chicago", "Central", "PST"), else the phone's area code, else the default.
+// Aliases come first: "EST" is also a real but fixed UTC-5 zone that ignores daylight saving time.
 export function leadTimezone(lead, calling) {
-  for (const tz of [lead.timezone, timezoneAlias(lead.timezone), timezoneFromPhone(lead.phone), calling.defaultTimezone]) {
+  for (const tz of [timezoneAlias(lead.timezone), lead.timezone, timezoneFromPhone(lead.phone), calling.defaultTimezone]) {
     if (isValidTimezone(tz)) return tz;
   }
   return 'America/New_York';
@@ -212,7 +213,13 @@ export function nextWindowStart(lead, calling, from = new Date()) {
     const weekday = ((day - 1 + d) % 7) + 1;
     if (!calling.days.includes(weekday)) continue;
     const ahead = d * 1440 + calling.windowStartHour * 60 - nowMin;
-    if (ahead > 0) return new Date(from.getTime() + ahead * 60000);
+    if (ahead <= 0) continue;
+    // Counted in minutes from now, the opening is off by an hour if the clocks change in between: correct it.
+    let at = new Date(from.getTime() + ahead * 60000);
+    const there = localTimeInfo(leadTimezone(lead, calling), at);
+    const drift = calling.windowStartHour * 60 - (there.hour * 60 + there.minute);
+    if (drift && Math.abs(drift) <= 120) at = new Date(at.getTime() + drift * 60000);
+    return at;
   }
   return new Date(from.getTime() + 24 * 3600 * 1000); // no calling days configured
 }

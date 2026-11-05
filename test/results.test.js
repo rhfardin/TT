@@ -52,7 +52,7 @@ test('a call\'s transcript shows up while it\'s going on, and its cost and resul
   assert.equal(r.totals.interested, 1);
   assert.equal(r.totals.cost_cents, 12.8);
   assert.deepEqual(r.categories.map((c) => c.label), ['Dental']);
-  assert.deepEqual(r.variants.map((v) => v.label), ['A']);
+  assert.deepEqual(r.variants, [], 'a one-off call is not part of a script comparison');
   assert.equal(r.byDay.length, 1);
 });
 

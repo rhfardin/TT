@@ -23,6 +23,24 @@ test('bad settings are refused with a clear reason', async () => {
   assert.equal((await app.api('PUT', '/api/settings', { YOUR_NAME: 'Fardin' })).status, 200);
 });
 
+test('settings: empty days refused, phones tidied, secrets removable, old problems never block', async () => {
+  let r = await app.api('PUT', '/api/settings', { CALL_DAYS: '' });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /Days/);
+  assert.equal((await app.api('PUT', '/api/settings', { TRANSFER_PHONE: '(512) 555-0199' })).status, 200);
+  assert.equal((await app.api('GET', '/api/settings')).body.TRANSFER_PHONE, '+15125550199');
+  // Blank start hour = default 9, which is after an end hour of 8.
+  assert.equal((await app.api('PUT', '/api/settings', { CALL_WINDOW_START: '', CALL_WINDOW_END: '8' })).status, 400);
+  assert.equal((await app.api('PUT', '/api/settings', { CALCOM_API_KEY: 'cal_test_1234' })).status, 200);
+  assert.equal((await app.api('GET', '/api/settings')).body.CALCOM_API_KEY.set, true);
+  assert.equal((await app.api('PUT', '/api/settings', { CALCOM_API_KEY: '' })).status, 200);
+  assert.equal((await app.api('GET', '/api/settings')).body.CALCOM_API_KEY.set, true, 'blank keeps it');
+  assert.equal((await app.api('PUT', '/api/settings', { CALCOM_API_KEY: null })).status, 200);
+  assert.equal((await app.api('GET', '/api/settings')).body.CALCOM_API_KEY.set, false, 'null removes it');
+  r = await app.api('PUT', '/api/settings', { FOLLOWUP_DAYS: '3', BUSINESS_ADDRESS: '1 Main St, Cheyenne, WY' });
+  assert.match(r.body.error, /email sending/);
+});
+
 test('leads: paging, safe edits, test calls never touch real businesses', async () => {
   const rows = [['Business', 'Phone'], ...Array.from({ length: 30 }, (_, i) => [`Biz ${i}`, `512555${String(1000 + i)}`])];
   assert.equal((await app.api('POST', '/api/import', { rows })).body.imported, 30);

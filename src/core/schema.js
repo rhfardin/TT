@@ -147,11 +147,31 @@ export const MIGRATIONS = [
       "INSERT OR IGNORE INTO dnc_numbers (phone, source) SELECT phone, 'asked on a call' FROM leads WHERE status = 'dnc'",
     ],
   },
+  {
+    // Faster dashboard queries; clean-ups for things earlier versions got wrong.
+    version: 10,
+    statements: [
+      'CREATE INDEX IF NOT EXISTS idx_leads_campaign ON leads(campaign_id, status)',
+      'CREATE INDEX IF NOT EXISTS idx_calls_campaign ON calls(campaign_id)',
+      'CREATE INDEX IF NOT EXISTS idx_queue_campaign ON queue_items(campaign_id)',
+      'CREATE INDEX IF NOT EXISTS idx_leads_followup ON leads(followup_due_at)',
+      'CREATE INDEX IF NOT EXISTS idx_leads_hot ON leads(hot_at) WHERE hot_at IS NOT NULL',
+      'CREATE INDEX IF NOT EXISTS idx_calls_sid ON calls(call_sid)',
+      // Retries that landed in stopped campaigns could never run, but blocked those businesses.
+      "DELETE FROM queue_items WHERE campaign_id IN (SELECT id FROM campaigns WHERE status = 'stopped')",
+      // The owner's own test number and hidden-number callers don't belong on the do-not-call list.
+      "DELETE FROM dnc_numbers WHERE phone LIKE 'hidden:%' OR phone IN (SELECT phone FROM leads WHERE is_test = 1)",
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).version;
 
-// db: { get(sql, ...args), run(sql, ...args) }
+const setVersion = "INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+
+// db: { get(sql, ...args), run(sql, ...args), batch?(statements) }
+// Each version is applied as one transaction (with its version number), so a half-applied version can't
+// happen. If two copies of the app migrate at once, the loser finds the columns already there and moves on.
 export async function migrate(db) {
   for (const stmt of SCHEMA) await db.run(stmt);
   await db.run('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
@@ -159,9 +179,20 @@ export async function migrate(db) {
   let version = Number(row?.value ?? 1);
   for (const m of MIGRATIONS) {
     if (m.version <= version) continue;
-    for (const stmt of m.statements) await db.run(stmt);
-    await db.run("INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-      String(m.version));
+    try {
+      if (db.batch) await db.batch([...m.statements.map((s) => [s]), [setVersion, String(m.version)]]);
+      else {
+        for (const stmt of m.statements) await db.run(stmt);
+        await db.run(setVersion, String(m.version));
+      }
+    } catch (err) {
+      if (!/duplicate column name/i.test(err.message)) throw err;
+      // Another copy got there first (or an older version half-applied): finish what's missing.
+      for (const stmt of m.statements) {
+        try { await db.run(stmt); } catch (e) { if (!/duplicate column name/i.test(e.message)) throw e; }
+      }
+      await db.run(setVersion, String(m.version));
+    }
     version = m.version;
   }
   return version;

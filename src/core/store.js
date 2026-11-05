@@ -68,6 +68,7 @@ export function createStore(db) {
                             AND (handled_at IS NULL OR handled_at < hot_at) ORDER BY hot_at DESC LIMIT 100`),
     countNeedsYou: async () => (await db.get(`SELECT COUNT(*) AS n FROM leads WHERE is_test = 0 AND hot_at IS NOT NULL
                                               AND (handled_at IS NULL OR handled_at < hot_at)`)).n,
+    countEvents: async (leadId, kind) => (await db.get('SELECT COUNT(*) AS n FROM events WHERE lead_id = ? AND kind = ?', leadId, kind)).n,
     dueFollowups: (nowIso, limit = 10) => db.all(`SELECT * FROM leads WHERE followup_due_at <= ? AND followup_sent_at IS NULL
                                                    AND is_test = 0 ORDER BY followup_due_at LIMIT ?`, nowIso, limit),
     statusCounts: () => db.all('SELECT status, COUNT(*) AS n FROM leads WHERE is_test = 0 GROUP BY status'),
@@ -137,10 +138,18 @@ export function createStore(db) {
               SELECT value, ?, ?, ?, ? FROM json_each(?) WHERE true ON CONFLICT(lead_id) DO NOTHING`,
       notBeforeIso, ignoreWindow ? 1 : 0, reason, campaignId, ids(list)),
     // Adds or moves one lead's queue entry (used for retries).
+    // A retry never inherits "ignore calling hours" from an earlier entry.
     scheduleLead: (leadId, notBeforeIso, reason, campaignId = null) =>
       db.run(`INSERT INTO queue_items (lead_id, not_before, reason, campaign_id) VALUES (?, ?, ?, ?)
-              ON CONFLICT(lead_id) DO UPDATE SET not_before = excluded.not_before, reason = excluded.reason, claimed_at = NULL`,
+              ON CONFLICT(lead_id) DO UPDATE SET not_before = excluded.not_before, reason = excluded.reason, claimed_at = NULL,
+                ignore_window = 0, campaign_id = excluded.campaign_id`,
       Number(leadId), notBeforeIso, reason, campaignId),
+    dropStoppedQueueItems: (list) =>
+      db.run(`DELETE FROM queue_items WHERE lead_id IN (SELECT value FROM json_each(?))
+              AND campaign_id IN (SELECT id FROM campaigns WHERE status IN ('stopped', 'archived'))`, ids(list)),
+    // When the last call (of ours, not a test) went out, for the gap between calls.
+    lastOutboundCallAt: async () => (await db.get(`SELECT MAX(c.created_at) AS t FROM calls c JOIN leads l ON l.id = c.lead_id
+                                                   WHERE c.direction = 'outbound' AND l.is_test = 0`)).t ?? null,
     // Paused or stopped campaigns hold their place in the queue without being called.
     nextDueItem: (nowIso) =>
       db.get(`SELECT q.* FROM queue_items q LEFT JOIN campaigns c ON c.id = q.campaign_id
@@ -159,7 +168,11 @@ export function createStore(db) {
                               FROM queue_items q LEFT JOIN campaigns c ON c.id = q.campaign_id WHERE q.claimed_at IS NULL`);
       return { pending: r.n, nextAt: r.next_at ?? null };
     },
-    clearQueue: () => db.run('DELETE FROM queue_items'),
+    // Stop: nobody waiting is called, and nobody gets automatic retries from this list any more.
+    async clearQueue() {
+      await db.run('UPDATE leads SET in_campaign = 0 WHERE id IN (SELECT lead_id FROM queue_items)');
+      await db.run('DELETE FROM queue_items');
+    },
 
     // ---- Campaigns ----
     async createCampaign(name, variantMode) {
@@ -167,8 +180,11 @@ export function createStore(db) {
     },
     getCampaign: (id) => db.get('SELECT * FROM campaigns WHERE id = ?', Number(id)),
     setCampaignStatus: (id, status) => db.run('UPDATE campaigns SET status = ? WHERE id = ?', status, Number(id)),
-    stopAllCampaigns: () => db.run("UPDATE campaigns SET status = 'stopped' WHERE status != 'stopped'"),
-    dequeueCampaign: (id) => db.run('DELETE FROM queue_items WHERE campaign_id = ?', Number(id)),
+    stopAllCampaigns: () => db.run("UPDATE campaigns SET status = 'stopped' WHERE status NOT IN ('stopped', 'archived')"),
+    async dequeueCampaign(id) {
+      await db.run('UPDATE leads SET in_campaign = 0 WHERE campaign_id = ?', Number(id));
+      await db.run('DELETE FROM queue_items WHERE campaign_id = ?', Number(id));
+    },
     setLeadsCampaign: (list, campaignId) =>
       db.run('UPDATE leads SET campaign_id = ?, in_campaign = 1 WHERE id IN (SELECT value FROM json_each(?))', campaignId, ids(list)),
     // Each campaign with its progress: how many are still waiting, were reached, are interested or said yes.
@@ -178,7 +194,7 @@ export function createStore(db) {
         (SELECT COUNT(*) FROM queue_items q WHERE q.campaign_id = c.id) AS waiting,
         (SELECT COUNT(*) FROM calls k WHERE k.campaign_id = c.id) AS calls,
         (SELECT COUNT(*) FROM calls k WHERE k.campaign_id = c.id AND k.talked = 1) AS talked,
-        (SELECT COUNT(*) FROM leads l WHERE l.campaign_id = c.id AND l.status = 'interested') AS interested,
+        (SELECT COUNT(*) FROM leads l WHERE l.campaign_id = c.id AND l.status IN ('interested', 'won')) AS interested,
         (SELECT COUNT(*) FROM leads l WHERE l.campaign_id = c.id AND l.status = 'won') AS won
       FROM campaigns c WHERE c.status != 'archived' ORDER BY c.id DESC LIMIT 50`),
     releaseStaleClaims: (olderThanIso) => db.run('UPDATE queue_items SET claimed_at = NULL WHERE claimed_at < ?', olderThanIso),
@@ -217,7 +233,8 @@ export function createStore(db) {
           ROUND(SUM(COALESCE(c.cost_cents, 0)), 2) AS cost_cents
         FROM calls c JOIN leads l ON l.id = c.lead_id LEFT JOIN campaigns k ON k.id = c.campaign_id
         WHERE l.is_test = 0 AND c.created_at >= datetime(?)
-        ${group ? `GROUP BY label ORDER BY ${by === 'day' ? 'label' : 'calls DESC'} LIMIT 60` : ''}`, sinceIso);
+          ${by === 'variant' ? "AND c.direction = 'outbound' AND k.variant_mode IN ('A', 'B', 'AB')" : ''}
+        ${group ? `GROUP BY label ORDER BY ${by === 'day' ? 'label' : 'calls DESC'} LIMIT ${by === 'day' ? 400 : 60}` : ''}`, sinceIso);
     },
     // Everything about every business, for the spreadsheet export.
     exportLeads: () => db.all(`

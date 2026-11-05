@@ -1,4 +1,4 @@
-import { isValidTimezone } from './leads.js';
+import { isValidTimezone, normalizePhone } from './leads.js';
 
 // Settings the owner can change from the dashboard. Saved values override environment variables.
 export const SETTINGS = [
@@ -96,7 +96,11 @@ const LABELS = {
   ALERT_EMAIL: 'Alert email', FOLLOWUP_DAYS: 'Follow-up email',
 };
 
-// Blank secret fields mean "keep the current one"; blank normal fields mean "use the default".
+const PHONES = ['TRANSFER_PHONE', 'TWILIO_FROM_NUMBER'];
+// Fields that can't be left blank (blank would mean "no days" rather than a default).
+const REQUIRED = { CALL_DAYS: 'pick at least one day' };
+
+// Blank secret fields mean "keep the current one" (null removes it); blank normal fields mean "use the default".
 // current: the values in effect now, to check combinations like start hour < end hour.
 export function cleanSettingsUpdate(body, current = {}) {
   const values = {};
@@ -104,20 +108,36 @@ export function cleanSettingsUpdate(body, current = {}) {
   for (const [key, raw] of Object.entries(body || {})) {
     const def = BY_KEY[key];
     if (!def) continue;
-    const value = String(raw ?? '').trim().slice(0, def.long ? 30000 : 10000);
+    if (def.secret && raw === null) {
+      values[key] = ''; // "Remove"
+      continue;
+    }
+    let value = String(raw ?? '').trim().slice(0, def.long ? 30000 : 10000);
     if (def.secret && !value) continue;
+    if (!value && REQUIRED[key]) {
+      errors.push(`${LABELS[key]}: ${REQUIRED[key]}`);
+      continue;
+    }
+    if (value && PHONES.includes(key)) value = normalizePhone(value, current.DEFAULT_COUNTRY_CODE || '1') || value;
     const problem = value && VALIDATE[key]?.(value);
     if (problem) errors.push(`${LABELS[key]} ${problem}`);
     else values[key] = value;
   }
-  const start = Number(values.CALL_WINDOW_START || current.CALL_WINDOW_START || 9);
-  const end = Number(values.CALL_WINDOW_END || current.CALL_WINDOW_END || 17);
-  if (start >= end) errors.push('Start hour must be before end hour');
-  const transferOn = (values.TRANSFER_ENABLED ?? current.TRANSFER_ENABLED) === 'true';
-  if (transferOn && !(values.TRANSFER_PHONE ?? current.TRANSFER_PHONE)) errors.push('Add your phone number to turn on live transfer');
-  const followupOn = Number(values.FOLLOWUP_DAYS ?? current.FOLLOWUP_DAYS ?? 0) > 0;
-  if (followupOn && !(values.BUSINESS_ADDRESS ?? current.BUSINESS_ADDRESS)) {
-    errors.push('Add your business postal address to turn on follow-up emails (US law requires it in marketing emails)');
+  // Combinations are only checked when one of their fields is being changed, so an old problem
+  // elsewhere never blocks saving something unrelated.
+  const changed = (...keys) => keys.some((k) => k in values);
+  const pick = (key, fallback) => (key in values ? values[key] : current[key]) || fallback;
+  if (changed('CALL_WINDOW_START', 'CALL_WINDOW_END')) {
+    if (Number(pick('CALL_WINDOW_START', 9)) >= Number(pick('CALL_WINDOW_END', 17))) errors.push('Start hour must be before end hour');
+  }
+  if (changed('TRANSFER_ENABLED', 'TRANSFER_PHONE') && pick('TRANSFER_ENABLED') === 'true' && !pick('TRANSFER_PHONE')) {
+    errors.push('Add your phone number to turn on live transfer');
+  }
+  if (changed('FOLLOWUP_DAYS', 'BUSINESS_ADDRESS', 'RESEND_API_KEY', 'EMAIL_FROM') && Number(pick('FOLLOWUP_DAYS', 0)) > 0) {
+    if (!pick('BUSINESS_ADDRESS')) {
+      errors.push('Add your business postal address to turn on follow-up emails (US law requires it in marketing emails)');
+    }
+    if (!pick('RESEND_API_KEY') && !current.SMTP_HOST) errors.push('Set up email sending (Resend key) to turn on follow-up emails');
   }
   return { values, errors };
 }

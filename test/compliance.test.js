@@ -5,7 +5,7 @@ import { makeCtx, lead } from './helpers.js';
 import { placeCall, markDoNotCall } from '../src/core/actions.js';
 import { enqueueLeads, runDue } from '../src/core/queue.js';
 
-const TWILIO = { OPENAI_API_KEY: 'sk', TWILIO_ACCOUNT_SID: 'AC1', TWILIO_AUTH_TOKEN: 'tok', TWILIO_FROM_NUMBER: '+15550000000' };
+const TWILIO = { OPENAI_API_KEY: 'sk', TWILIO_ACCOUNT_SID: 'AC1', TWILIO_AUTH_TOKEN: 'tok', TWILIO_FROM_NUMBER: '+15550000000', CALL_SPACING_SECONDS: '0' };
 const realFetch = globalThis.fetch;
 let placed;
 beforeEach(() => {
