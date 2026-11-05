@@ -38,3 +38,13 @@ test('login is locked after 5 wrong passwords', async () => {
   for (let i = 0; i < 5; i++) assert.equal((await app.api('POST', '/api/login', { password: 'nope' })).status, 401);
   assert.equal((await app.api('POST', '/api/login', { password: 'pw' })).status, 429);
 });
+
+test('a flood of wrong guesses from many addresses can\'t lock the owner out', async () => {
+  const { handleRequest } = await import('../src/core/api.js');
+  const { makeCtx } = await import('./helpers.js');
+  const { ctx } = await makeCtx({ ADMIN_PASSWORD: 'right-password' });
+  const login = (ip, password) => handleRequest(ctx, { method: 'POST', path: '/api/login', query: {}, body: { password }, headers: { 'x-requested-with': 'fetch' }, ip });
+  for (let i = 0; i < 60; i++) assert.equal((await login(`10.0.${i}.1`, 'guess')).status, 401);
+  assert.equal((await login('10.0.0.1', 'guess')).status, 429, 'a second guess from an address is stopped by the overall limit');
+  assert.equal((await login('203.0.113.9', 'right-password')).status, 200, 'the owner still gets in');
+});

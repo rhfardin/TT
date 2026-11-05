@@ -104,10 +104,11 @@ export function renderPrompt(template, lead, seller, {
   }
   if (callbacks) {
     extra += `\n\n# Calling back at a time they pick\nRight now it is ${localNow} for them. If they (or whoever answers, like a ` +
-      'receptionist) tell you a better time to call ("try tomorrow after 2", "he\'s in Thursday morning"), agree and call ' +
-      'schedule_callback with that day and time as YYYY-MM-DD HH:MM, 24-hour clock, their local time ("morning" = 10:00, ' +
+      'receptionist) tell you a better time for you to call again ("try tomorrow after 2", "he\'s in Thursday morning"), agree and ' +
+      'call schedule_callback with that day and time as YYYY-MM-DD HH:MM, 24-hour clock, their local time ("morning" = 10:00, ' +
       '"afternoon" = 14:00, "after lunch" = 13:30). Then confirm it back in a few words ("Perfect, I\'ll call Thursday at 10"). ' +
-      'If it says the time won\'t work, suggest the closest time that does.';
+      'If it says the time won\'t work, suggest the closest time that does. ' +
+      `Don't use it when they want ${name} himself to call them: that time is a note for him, not a call from you.`;
   }
   if (menus) {
     extra += '\n\n# Phone menus\nIf a recording answers with options ("press 1 for appointments..."), don\'t talk over it: ' +

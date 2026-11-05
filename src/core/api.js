@@ -10,7 +10,7 @@ import {
 } from './actions.js';
 import { calcomReady, getSlots, spokenTime } from './calcom.js';
 import { enqueueLeads, queueState, clearQueue } from './queue.js';
-import { randomToken, secretEqual, verifyPassword, hashPassword } from './crypto.js';
+import { randomToken, secretEqual, verifyPassword, hashPassword, hmacHex } from './crypto.js';
 import { webhookSecret } from './notify.js';
 import { fetchRecording, setInboundUrl } from './twilio.js';
 
@@ -37,10 +37,17 @@ const LOGIN_GLOBAL_LIMIT = 50; // wrong passwords per 10 minutes from everywhere
 
 const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => obj?.[k] !== undefined).map((k) => [k, obj[k]]));
 
-// The dashboard password: one changed in Settings (stored as a hash) wins over ADMIN_PASSWORD.
+// Which ADMIN_PASSWORD was in place when the password was changed in Settings (not the password itself).
+const envFingerprint = (config) => hmacHex('admin-password-fingerprint', String(config.adminPassword || ''));
+
+// The dashboard password: one changed in Settings (stored as a hash) wins over ADMIN_PASSWORD, until
+// ADMIN_PASSWORD itself is changed. That's the way back in after forgetting the new one.
 async function checkPassword(ctx, password) {
-  const hash = (await ctx.store.getSettings()).ADMIN_PASSWORD_HASH;
-  return hash ? verifyPassword(password, hash) : secretEqual(password, ctx.config.adminPassword);
+  const saved = await ctx.store.getSettings();
+  if (saved.ADMIN_PASSWORD_HASH && saved.ADMIN_PASSWORD_ENV === (await envFingerprint(ctx.config))) {
+    return verifyPassword(String(password ?? ''), saved.ADMIN_PASSWORD_HASH);
+  }
+  return secretEqual(password, ctx.config.adminPassword);
 }
 
 export async function handleRequest(ctx, req) {
@@ -75,8 +82,10 @@ export async function handleRequest(ctx, req) {
     const since = new Date(Date.now() - LOGIN_LIMIT.minutes * 60 * 1000).toISOString();
     // The attempt is counted before the password is checked, so parallel guesses can't slip past.
     await store.addLoginFailure(key);
-    if ((await store.recentLoginFailures(key, since)) > LOGIN_LIMIT.tries ||
-        (await store.recentLoginFailuresAll(since)) > LOGIN_GLOBAL_LIMIT) {
+    // The overall limit (against guessing from many addresses) only applies to an address that already got
+    // it wrong, so a flood of guesses can't lock the owner out of their first, correct try.
+    const mine = await store.recentLoginFailures(key, since);
+    if (mine > LOGIN_LIMIT.tries || (mine > 1 && (await store.recentLoginFailuresAll(since)) > LOGIN_GLOBAL_LIMIT)) {
       return ok({ error: `Too many wrong passwords. Try again in ${LOGIN_LIMIT.minutes} minutes.` }, 429);
     }
     if (!(await checkPassword(ctx, body.password))) return ok({ error: 'Wrong password' }, 401);
@@ -132,7 +141,7 @@ export async function handleRequest(ctx, req) {
     const next = String(body.next ?? '');
     if (next.length < 10) return ok({ error: 'Use at least 10 characters for the new password' }, 400);
     if (next.length > 200) return ok({ error: 'That password is too long' }, 400);
-    await store.saveSettings({ ADMIN_PASSWORD_HASH: await hashPassword(next) });
+    await store.saveSettings({ ADMIN_PASSWORD_HASH: await hashPassword(next), ADMIN_PASSWORD_ENV: await envFingerprint(config) });
     await store.deleteOtherSessions(sessionId);
     return ok({ ok: true });
   }
@@ -165,7 +174,7 @@ export async function handleRequest(ctx, req) {
     if (existing?.status === 'calling') return ok({ ok: false, error: 'A test call to this number is already going on.' }, 400);
     await store.upsertLeads([{
       phone, business_name: String(body.business_name || 'Test Business').slice(0, 200), contact_name: null,
-      email: null, website: null, demo_link: body.demo_link || 'https://example.com/preview', category: 'dental',
+      email: null, website: null, demo_link: (typeof body.demo_link === 'string' && body.demo_link.slice(0, 500)) || 'https://example.com/preview', category: 'dental',
       city: null, timezone: null, notes: 'This is a test call to the owner of the calling system.', extra: '{}',
     }]);
     const lead = await store.getLeadByPhone(phone);

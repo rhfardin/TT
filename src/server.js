@@ -134,7 +134,8 @@ app.use(['/api', '/tools'], express.json({ limit: '20mb' }), route(async (req, r
     path: req.originalUrl.split('?')[0],
     query: req.query,
     body: req.body,
-    ip: req.get('cf-connecting-ip') || req.ip,
+    // CF-Connecting-IP can be faked by anyone unless Cloudflare really is in front (BEHIND_CLOUDFLARE=true).
+    ip: (process.env.BEHIND_CLOUDFLARE === 'true' && req.get('cf-connecting-ip')) || req.ip,
     secure: req.secure,
     headers: {
       cookie: req.get('cookie'), 'x-tool-secret': req.get('x-tool-secret'), 'x-requested-with': req.get('x-requested-with'),

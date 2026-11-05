@@ -163,3 +163,31 @@ test('paused: the queue waits and manual calls are refused; the spend limit work
   assert.match((await placeCall(spend.ctx, 1)).error, /spend limit/);
   assert.equal(calls.length, 0);
 });
+
+test('a voicemail greeting that got transcribed still gets a retry', async () => {
+  const { ctx, db, store } = await setup({ RETRY_VOICEMAIL_HOURS: '24' });
+  await enqueueLeads(ctx, [1]);
+  const callId = await store.insertCall(1);
+  await store.updateLead(1, { status: 'calling', attempts: 1 });
+  await db.run('DELETE FROM queue_items');
+  const { recordCallResult } = await import('../src/core/actions.js');
+  await recordCallResult(ctx, callId, {
+    summary: 'Voicemail.', outcome: 'voicemail', duration: 20,
+    transcript: [{ role: 'user', message: 'You have reached Bright Smile, leave a message after the tone.' }],
+  });
+  assert.equal((await store.getLead(1)).status, 'voicemail');
+  assert.ok(await db.get('SELECT * FROM queue_items WHERE lead_id = 1'), 'retry queued');
+});
+
+test('no call-back is booked for someone who asked not to be called, or who booked a meeting', async () => {
+  const { ctx, db, store } = await setup({}, [lead(), lead({ phone: '+15125550101', business_name: 'Booked' })]);
+  const { recordCallResult } = await import('../src/core/actions.js');
+  const day = new Date(Date.now() + 2 * 864e5).toISOString().slice(0, 10);
+  const transcript = [{ role: 'user', message: 'Hi.' }];
+  const c1 = await store.insertCall(1);
+  await store.updateLead(1, { status: 'dnc' }); // set by the do-not-call tool during the call
+  await recordCallResult(ctx, c1, { outcome: 'callback', transcript, collected: { callback_at: `${day} 11:00` } });
+  const c2 = await store.insertCall(2);
+  await recordCallResult(ctx, c2, { outcome: 'meeting_booked', transcript, collected: { callback_at: `${day} 11:00` } });
+  assert.equal((await db.get('SELECT COUNT(*) AS n FROM queue_items')).n, 0);
+});

@@ -166,7 +166,8 @@ export class CallBridge {
         model: realtimeModel,
         output_modalities: ['audio'],
         instructions: renderPrompt(this.template(), this.lead, this.config.seller, {
-          recording: this.config.recordCalls, transfer, history: this.transcript, inbound, booking,
+          // Calls to us aren't recorded.
+          recording: this.config.recordCalls && !this.inbound, transfer, history: this.transcript, inbound, booking,
           callbacks, localNow: localNowText(leadTimezone(this.lead, this.config.calling)), menus, keysPressed,
         }),
         audio: {
@@ -443,12 +444,13 @@ export class CallBridge {
     if (!k || k.started || this.closed) return;
     k.started = true;
     this.addLine('agent', `(pressed ${k.digits} in their phone menu)`, { keys: k.digits });
+    const line = this.transcript.at(-1);
     this.endReason = 'keys'; // the stream closes as the call leaves it; finish() waits for this
     k.promise = pressKeys(this.ctx, this.callId, { callSid: this.callSid, digits: k.digits, transcript: this.transcript, usage: this.usage })
       .catch((err) => ({ ok: false, message: err.message }));
     const r = await k.promise;
     if (r.ok) return;
-    this.transcript.pop();
+    this.transcript.splice(this.transcript.indexOf(line), 1);
     this.endReason = null;
     this.pressing = null;
     this.sendOpenAI({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: k.callId, output: JSON.stringify(r) } });

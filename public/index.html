@@ -507,7 +507,9 @@ const when = (iso) => {
   const ms = d - Date.now();
   if (Math.abs(ms) < 60000) return ms > 0 ? 'soon' : 'just now';
   if (ms < 0 && ms > -864e5) return -ms < 3600e3 ? `${Math.round(-ms / 60000)} min ago` : `${Math.round(-ms / 3600e3)}h ago`;
-  return d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  return Math.abs(ms) > 6 * 864e5
+    ? d.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
 };
 // What time it is for the business ("9:14 AM there").
 const theirTime = (tz) => {
@@ -532,10 +534,10 @@ function showTab(name) {
   for (const t of ['leads', 'results', 'script', 'settings']) $(`#tab-${t}`).hidden = name !== t;
   if (name === 'settings' && !settingsDirty) loadSettings();
   if (name === 'results') loadResults();
-  if (name === 'script' && !scriptDirty) loadScript();
+  if (name === 'script' && !scriptDirty.A && !scriptDirty.B) loadScript();
 }
 let settingsDirty = false;
-let scriptDirty = false;
+const scriptDirty = { A: false, B: false };
 document.addEventListener('click', (e) => {
   const t = e.target.closest('[data-tab],[data-goto]');
   if (t) showTab(t.dataset.tab || t.dataset.goto);
@@ -550,7 +552,7 @@ async function loadNeedsYou() {
     <div class="need">
       <div class="what"><b>${esc(l.business_name)}</b> · <span class="pill good">${esc(l.hot_reason)}</span>
         <span class="muted">${esc(when(l.hot_at))}</span>
-        <div class="sub muted">${esc(l.phone)}${l.meeting_time ? ` · Follow up: ${esc(l.meeting_time)}` : ''}</div>
+        <div class="sub muted">${l.phone.startsWith('hidden:') ? 'Hidden number' : esc(l.phone)}${l.meeting_time ? ` · Follow up: ${esc(l.meeting_time)}` : ''}</div>
         <div class="summary muted">${esc(l.last_summary || '')}</div></div>
       <button class="small" data-open="${Number(l.id)}">Open</button>
       <button class="small primary" data-done="${Number(l.id)}">Done</button>
@@ -645,8 +647,8 @@ $('#bulkStatus').onchange = async () => {
 };
 
 let scriptDefault = '';
-$('#scriptA').addEventListener('input', () => (scriptDirty = true));
-$('#scriptB').addEventListener('input', () => (scriptDirty = true));
+$('#scriptA').addEventListener('input', () => (scriptDirty.A = true));
+$('#scriptB').addEventListener('input', () => (scriptDirty.B = true));
 async function loadScript() {
   const r = await api('/api/script');
   scriptDefault = r.default;
@@ -656,7 +658,7 @@ async function loadScript() {
 async function saveScript(key, value, out) {
   try {
     await api('/api/settings', { method: 'PUT', body: JSON.stringify({ [key]: value }) });
-    scriptDirty = false;
+    scriptDirty[key === 'PROMPT_TEMPLATE_B' ? 'B' : 'A'] = false;
     $(out).textContent = 'Saved. The next call uses it.';
   } catch (err) { $(out).textContent = err.message; }
 }
@@ -667,7 +669,7 @@ $('#resetScriptA').onclick = async () => {
   await saveScript('PROMPT_TEMPLATE', '', '#scriptAResult');
 };
 $('#saveScriptB').onclick = () => saveScript('PROMPT_TEMPLATE_B', $('#scriptB').value, '#scriptBResult');
-$('#copyAtoB').onclick = () => { $('#scriptB').value = $('#scriptA').value; };
+$('#copyAtoB').onclick = () => { $('#scriptB').value = $('#scriptA').value; scriptDirty.B = true; };
 
 async function loadStatus() {
   const s = await api('/api/status');
@@ -710,9 +712,18 @@ async function loadLeads(more = false) {
   const seq = ++leadsSeq;
   const g = GROUPS.find((x) => x.key === group);
   const shown = more ? leads.length : Math.max(leads.length, PAGE);
-  const params = new URLSearchParams({ q: $('#q').value, status: g.statuses.join(','),
-    offset: more ? leads.length : 0, limit: more ? PAGE : Math.min(shown, 500) });
-  const r = await api('/api/leads?' + params);
+  const page = (offset, limit) => api('/api/leads?' + new URLSearchParams({ q: $('#q').value, status: g.statuses.join(','), offset, limit }));
+  let r;
+  if (more) r = await page(leads.length, PAGE);
+  else {
+    // The server sends at most 500 at a time: a refresh keeps every row that was shown.
+    r = await page(0, Math.min(shown, 500));
+    while (r.leads.length < Math.min(shown, r.total) && seq === leadsSeq) {
+      const next = await page(r.leads.length, Math.min(shown - r.leads.length, 500));
+      if (!next.leads.length) break;
+      r = { ...next, leads: r.leads.concat(next.leads) };
+    }
+  }
   if (seq !== leadsSeq) return;
   leads = more ? leads.concat(r.leads) : r.leads;
   totalLeads = r.total;
@@ -875,14 +886,18 @@ async function openLead(id, { refreshing = false } = {}) {
   const drawer = $('#drawer');
   if (refreshing && (!drawer.classList.contains('open') || drawerId !== id)) return;
   let data;
-  try { data = await api(`/api/leads/${id}`); } catch (err) { if (!refreshing) toast(err.message); return; }
+  try { data = await api(`/api/leads/${id}`); } catch (err) {
+    if (!refreshing) toast(err.message);
+    else liveTimer = setTimeout(() => openLead(id, { refreshing: true }), 5000); // a hiccup: try again
+    return;
+  }
   if (seq !== drawerSeq || (refreshing && !drawer.classList.contains('open'))) return;
   const { lead, calls } = data;
   const hidden = String(lead.phone).startsWith('hidden:');
   const editing = drawerId === id && $('#dEditForm') && !$('#dEditForm').hidden;
   const openDetails = drawerId === id ? new Set([...drawer.querySelectorAll('details[data-call]')].filter((d) => d.open).map((d) => d.dataset.call)) : new Set();
   drawerId = id;
-  const live = calls[0] && ['ringing', 'in_progress', 'transferring'].includes(calls[0].status);
+  const live = calls[0] && ['initiated', 'ringing', 'in_progress', 'transferring', 'pressing_keys', 'finalizing'].includes(calls[0].status);
   const link = (u) => u ? `<a href="${esc(/^https?:/.test(u) ? u : 'https://' + u)}" target="_blank" rel="noopener">${esc(u)}</a>` : '';
   const rows = [['Owner', esc(lead.contact_name)], ['Phone', hidden ? 'Hidden number' : esc(lead.phone)], ['Email', esc(lead.email)],
     ['Website', link(lead.website)], ['Redesign', link(lead.demo_link)], ['Category', esc(lead.category)],
@@ -1016,7 +1031,13 @@ async function loadSettings() {
         b.type = 'button'; b.className = 'small remove-secret'; b.textContent = 'Remove saved key'; b.style.marginTop = '6px';
         b.onclick = async () => {
           if (!confirm('Remove this saved key? Features that need it stop working until you add one again.')) return;
-          try { await api('/api/settings', { method: 'PUT', body: JSON.stringify({ [key]: null }) }); toast('Removed'); loadSettings(); loadStatus(); }
+          try {
+            await api('/api/settings', { method: 'PUT', body: JSON.stringify({ [key]: null }) });
+            toast('Removed');
+            el.placeholder = 'Not set yet';
+            b.remove(); // only this field changes: other unsaved edits on the page stay
+            loadStatus();
+          }
           catch (err) { toast(err.message); }
         };
         el.after(b);

@@ -76,7 +76,7 @@ git clone <this repo> ai-caller && cd ai-caller
 cp .env.example .env      # fill in your values
 docker compose up -d --build
 ```
-Point your domain's DNS **A record** (for example `calls.yourdomain.com`) to the server's IP. Caddy gets the HTTPS certificate automatically. Then open `https://calls.yourdomain.com` and log in with `ADMIN_PASSWORD`.
+Point your domain's DNS **A record** (for example `calls.yourdomain.com`) to the server's IP. Caddy gets the HTTPS certificate automatically. Then open `https://calls.yourdomain.com` and log in with `ADMIN_PASSWORD`. (Changed it in Settings and forgot the new one? Set a different `ADMIN_PASSWORD` and restart, or run `npx wrangler secret put ADMIN_PASSWORD` on Cloudflare: the new one works again.)
 
 > HTTPS on a real domain is required: Twilio streams the call audio to `wss://<your domain>/media-stream/<call id>`.
 

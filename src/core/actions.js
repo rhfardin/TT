@@ -141,10 +141,12 @@ export async function recordCallResult(ctx, callId, { summary, transcript, outco
   if (reason && !lead.is_test) await notifyOwner(ctx, { ...lead, ...fields }, { reason, summary, collected });
   const unreached = fields.status === 'no_answer' || fields.status === 'voicemail';
   // Reached (on any call, theirs or ours): a retry call already waiting for them would be one too many.
-  if (talked || (!inbound && !unreached)) await store.dequeueLead(lead.id, call.created_at);
-  else if (!inbound && unreached) await scheduleRetry(ctx, lead.id, fields.status);
+  // Unreached first: a voicemail greeting or phone menu is transcribed too, but nobody was reached.
+  if (!inbound && unreached) await scheduleRetry(ctx, lead.id, fields.status);
+  else if (talked || !inbound) await store.dequeueLead(lead.id, call.created_at);
   // They gave a time to call back but the AI didn't book it during the call: book it now.
-  if (collected.callback_at && fields.status !== 'dnc' && !callbackSet && !lead.is_test) {
+  const booked = outcome === 'meeting_booked' || outcome === 'transferred';
+  if (collected.callback_at && (fields.status ?? lead.status) !== 'dnc' && !callbackSet && !booked && !lead.is_test) {
     const r = await scheduleCallback(ctx, { lead_id: lead.id, when: collected.callback_at, note: 'from the call summary' });
     if (!r.ok) await store.logEvent(lead.id, 'callback_not_set', `${collected.callback_at}: ${r.message}`);
   }
@@ -195,7 +197,8 @@ export async function pressKeys(ctx, callId, { callSid, digits, transcript, usag
   try {
     await updateCall(config.twilio, callSid, await streamTwiml(config, callId, { resume: 'keys', digits }));
   } catch (err) {
-    await store.updateCall(callId, { status: 'in_progress' });
+    // Only if the call is still ours: if it ended meanwhile, it was already recorded as finished.
+    await store.claimCallStatus(callId, 'pressing_keys', 'in_progress');
     return { ok: false, message: 'The keys could not be pressed. Try saying the option out loud, or wait for an operator.' };
   }
   const call = await store.getCall(callId);
@@ -230,7 +233,7 @@ function callCostCents(config, { usage, duration, inbound, extraSeconds = 0 }) {
   }
   return estimateCostCents({
     model: config.openai.realtimeModel, usage, seconds, answered: seconds > 0 || extraSeconds > 0, inbound,
-    amd: config.calling.amdEnabled, recorded: config.recordCalls, extraSeconds,
+    amd: config.calling.amdEnabled, recorded: config.recordCalls && !inbound, extraSeconds, // calls to us aren't recorded
   });
 }
 
@@ -285,10 +288,11 @@ export async function handleTwilioStatus(ctx, callId, params) {
         await recordNotConnected(ctx, callId, 'the call was answered but the AI audio never connected; check PUBLIC_URL', 'failed');
       }
     } else if (call.status === 'pressing_keys') {
-      await finishPausedCall(ctx, call, Number(params.CallDuration) || null);
+      // The analysis can take longer than Twilio waits for an answer.
+      await inBackground(ctx, finishPausedCall(ctx, call, Number(params.CallDuration) || null));
     } else if (call.status === 'transferring') {
       // The call ended during or after a transfer without the Dial result arriving first.
-      await finalizeTransfer(ctx, callId, { duration: Number(params.CallDuration) || null });
+      await inBackground(ctx, finalizeTransfer(ctx, callId, { duration: Number(params.CallDuration) || null }));
     } else if (call.status === 'completed' && !call.duration_secs && Number(params.CallDuration) > 0) {
       // Recorded before the call ended (voicemail detection): add the length and its cost now.
       const seconds = Number(params.CallDuration);
@@ -361,7 +365,7 @@ export async function startTransfer(ctx, callId, { callSid, summary, transcript 
     // The call's time limit was set for the AI part; the owner's conversation gets up to 4 hours.
     await updateCall(config.twilio, callSid, transferTwiml(config, callId), { TimeLimit: '14400' });
   } catch (err) {
-    await store.updateCall(callId, { status: 'in_progress', transfer_state: 'failed' });
+    if (await store.claimCallStatus(callId, 'transferring', 'in_progress')) await store.updateCall(callId, { transfer_state: 'failed' });
     return { ok: false, message: `The transfer didn't go through. Apologize and offer that ${config.seller.yourName || 'the owner'} calls them back today.` };
   }
   const call = await store.getCall(callId);
@@ -610,7 +614,8 @@ export async function analyzeCall(config, lead, transcript, endReason) {
             '"decision_maker_name": "owner/decision maker name or empty", "next_step": "what the salesperson should do next", ' +
             '"requests": "changes they want, questions the AI could not answer, and anything promised to them, or empty", ' +
             '"business_name": "the caller\'s business name if they said it, or empty", ' +
-            '"callback_at": "if they asked to be called back at a particular day and time, that time as YYYY-MM-DD HH:MM ' +
+            '"callback_at": "if they asked the caller (not the salesperson personally, and not a booked meeting) to call again at ' +
+            'a particular day and time, that time as YYYY-MM-DD HH:MM ' +
             `(24-hour, their local time; it was ${localNowText(tz)} for them during the call), else empty"}. ` +
             'Use "link_sent" if they agreed to receive the preview, "sold" only if they clearly agreed to buy.',
         },

@@ -91,3 +91,21 @@ test('changing the password signs out every other browser', async () => {
   assert.equal((await app.api('POST', '/api/login', { password: 'pw' })).status, 401, 'old password no longer works');
   assert.equal((await app.api('POST', '/api/login', { password: 'a-long-new-password' })).status, 200);
 });
+
+test('a forgotten password: changing ADMIN_PASSWORD lets you back in', async () => {
+  const { handleRequest } = await import('../src/core/api.js');
+  const { makeCtx } = await import('./helpers.js');
+  const { store } = await makeCtx();
+  const { buildConfig } = await import('../src/core/config.js');
+  const ctxWith = (pw) => ({ store, env: {}, config: buildConfig({ ADMIN_PASSWORD: pw }) });
+  const req = (path, body) => ({ method: 'POST', path, query: {}, body, headers: { 'x-requested-with': 'fetch' }, ip: '1.2.3.4' });
+  const a = ctxWith('first-password');
+  assert.equal((await handleRequest(a, req('/api/login', { password: 'first-password' }))).status, 200);
+  // Logged in as that session (the password route needs one): fake it straight in the store.
+  await store.createSession('s1', new Date(Date.now() + 864e5).toISOString());
+  const withSession = { ...req('/api/password', { current: 'first-password', next: 'forgotten-password' }), headers: { 'x-requested-with': 'fetch', cookie: 'session=s1' } };
+  assert.equal((await handleRequest(a, withSession)).status, 200);
+  assert.equal((await handleRequest(a, req('/api/login', { password: 'first-password' }))).status, 401);
+  const b = ctxWith('new-env-password');
+  assert.equal((await handleRequest(b, req('/api/login', { password: 'new-env-password' }))).status, 200);
+});

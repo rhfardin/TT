@@ -86,7 +86,9 @@ const VALIDATE = {
   CALLING_PAUSED: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
   LUNCH_BREAK: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
   NO_CALL_DATES: (v) => {
-    const bad = v.split(/[\s,;]+/).filter((d) => d && !(/^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d))));
+    // Real calendar dates only (2026-02-31 would never match a day).
+    const real = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d)) && new Date(`${d}T00:00:00Z`).toISOString().startsWith(d);
+    const bad = v.split(/[\s,;]+/).filter((d) => d && !real(d));
     return bad.length ? `must be dates like 2026-12-25 (not "${bad[0]}")` : null;
   },
   DAILY_SPEND_LIMIT: (v) => (/^\d{1,4}(\.\d{1,2})?$/.test(v) ? null : 'must be an amount in dollars, like 10 or 7.50 (0 = no limit)'),
