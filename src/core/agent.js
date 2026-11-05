@@ -110,7 +110,7 @@ export function followUpMessage(lead, name, seller) {
     name ? `Hi ${name},` : 'Hi,',
     '',
     `Thanks for taking the call just now. Here is the new website we put together for ${lead.business_name}:`,
-    lead.demo_link || lead.website || '',
+    lead.demo_link,
     '',
   ];
   if (seller.bookingLink) lines.push(`If you'd like to go over it together, grab a time here: ${seller.bookingLink}`, '');

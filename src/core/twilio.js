@@ -38,13 +38,13 @@ export async function createStreamingCall(config, { to, callId }) {
   });
 }
 
-export const hangUp = (tw, callSid) => post(tw, `/Calls/${callSid}.json`, { Status: 'completed' });
+export const hangUp = (tw, callSid) => post(tw, `/Calls/${encodeURIComponent(callSid)}.json`, { Status: 'completed' });
 
 export const sendSms = (tw, to, text) => post(tw, '/Messages.json', { To: to, From: tw.fromNumber, Body: text.slice(0, 1500) });
 
 // https://www.twilio.com/docs/usage/security#validating-requests
 export async function validTwilioSignature(tw, url, params, signature) {
-  if (!signature) return false;
+  if (!signature || !tw.authToken) return false;
   const data = url + Object.keys(params).sort().map((k) => k + params[k]).join('');
   return safeEqual(await hmacSha1Base64(tw.authToken, data), signature);
 }

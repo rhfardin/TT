@@ -59,6 +59,28 @@ export const MIGRATIONS = [
       'CREATE INDEX IF NOT EXISTS idx_events_lead ON events(lead_id)',
     ],
   },
+  {
+    // Call queue in the database (survives restarts), dashboard sessions, test-call leads.
+    version: 3,
+    statements: [
+      'ALTER TABLE leads ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE leads ADD COLUMN in_campaign INTEGER NOT NULL DEFAULT 0',
+      `CREATE TABLE IF NOT EXISTS queue_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        lead_id INTEGER NOT NULL UNIQUE,
+        not_before TEXT NOT NULL,
+        ignore_window INTEGER NOT NULL DEFAULT 0,
+        reason TEXT,
+        claimed_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+      'CREATE INDEX IF NOT EXISTS idx_queue_due ON queue_items(not_before)',
+      'CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, expires_at TEXT NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS login_attempts (key TEXT NOT NULL, at TEXT NOT NULL)',
+      // The old in-memory queue marked leads "queued"; that status no longer exists.
+      "UPDATE leads SET status = CASE WHEN attempts > 0 THEN 'no_answer' ELSE 'new' END WHERE status = 'queued'",
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).version;

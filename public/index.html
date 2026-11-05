@@ -275,23 +275,27 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 // Plain-language names and colors for each status.
 const STATUS = {
-  new: ['Not called', ''], queued: ['Waiting', 'warn'], calling: ['Calling now', 'warn'],
+  new: ['Not called', ''], calling: ['Calling now', 'warn'],
   no_answer: ['No answer', ''], voicemail: ['Voicemail', ''], callback: ['Call back', 'warn'],
   interested: ['Interested', 'good'], won: ['Won', 'good'], completed: ['Talked', ''],
   not_interested: ['Not interested', 'bad'], failed: ['Call failed', 'bad'], dnc: ['Do not call', 'bad'],
 };
 const GROUPS = [
-  { key: 'todo', label: 'To call', statuses: ['new', 'no_answer', 'voicemail', 'callback', 'queued', 'calling', 'failed'] },
+  { key: 'todo', label: 'To call', statuses: ['new', 'no_answer', 'voicemail', 'callback', 'calling', 'failed'] },
   { key: 'interested', label: 'Interested', statuses: ['interested'] },
   { key: 'won', label: 'Won', statuses: ['won'] },
   { key: 'all', label: 'All businesses', statuses: [] },
 ];
 let group = 'all';
 let leads = [];
+let totalLeads = 0;
+let leadsSeq = 0;
+const PAGE = 200;
 const selected = new Set();
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { headers: opts.body ? { 'Content-Type': 'application/json' } : {}, ...opts });
+  const headers = { 'X-Requested-With': 'fetch', ...(opts.body ? { 'Content-Type': 'application/json' } : {}) };
+  const res = await fetch(path, { ...opts, headers });
   if (res.status === 401 && path !== '/api/login') { showLogin(); throw new Error('Please log in'); }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `Something went wrong (${res.status})`);
@@ -302,6 +306,13 @@ function toast(msg) {
   clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = 'none'), 5000);
 }
 const pill = (s) => { const [label, cls] = STATUS[s] || [s, '']; return `<span class="pill ${cls}">${esc(label)}</span>`; };
+const when = (iso) => {
+  const d = new Date(iso);
+  return d - Date.now() < 60000 ? 'soon' : d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+};
+// Shown in the list: a lead waiting in the queue says when it will be called.
+const leadPill = (l) => (l.next_call_at && l.status !== 'calling'
+  ? `<span class="pill warn">Waiting · ${esc(when(l.next_call_at))}</span>` : pill(l.status));
 
 // ---------- Login ----------
 function showLogin() { $('#login').hidden = false; $('#app').hidden = true; }
@@ -339,20 +350,29 @@ async function loadStatus() {
   if (s.providerProblem) $('#setupText').textContent = 'Add your OpenAI key and Twilio details in Settings to start calling.';
 
   const q = s.queue;
-  $('#queueBar').hidden = !q.pending.length;
-  $('#queueText').textContent = `Calling your list: ${q.pending.length} waiting. Calls go out one at a time.`;
+  $('#queueBar').hidden = !q.pending && !q.active;
+  $('#queueText').textContent = `${q.active ? 'On a call now. ' : ''}${q.pending} waiting to be called` +
+    (q.pending && q.nextAt ? `, next ${when(q.nextAt)}` : '') + '. Calls go out one at a time, only during calling hours.';
 }
 $('#stats').onclick = (e) => {
   const b = e.target.closest('[data-group]');
   if (!b) return;
   group = b.dataset.group;
+  selected.clear();
   refresh();
 };
 
-async function loadLeads() {
+// more=true appends the next page; otherwise reloads what's shown (newer requests win).
+async function loadLeads(more = false) {
+  const seq = ++leadsSeq;
   const g = GROUPS.find((x) => x.key === group);
-  const params = new URLSearchParams({ q: $('#q').value, status: g.statuses.join(',') });
-  leads = (await api('/api/leads?' + params)).leads;
+  const shown = more ? leads.length : Math.max(leads.length, PAGE);
+  const params = new URLSearchParams({ q: $('#q').value, status: g.statuses.join(','),
+    offset: more ? leads.length : 0, limit: more ? PAGE : Math.min(shown, 500) });
+  const r = await api('/api/leads?' + params);
+  if (seq !== leadsSeq) return;
+  leads = more ? leads.concat(r.leads) : r.leads;
+  totalLeads = r.total;
   render();
 }
 
@@ -373,10 +393,11 @@ function render() {
         <input type="checkbox" class="sel" data-id="${l.id}" ${selected.has(l.id) ? 'checked' : ''}>
         <div><div class="name">${esc(l.business_name)}</div><div class="sub">${esc([l.category, l.city].filter(Boolean).join(' · '))}</div></div>
         <div class="c-phone">${esc(l.phone)}</div>
-        <div class="c-status">${pill(l.status)}</div>
+        <div class="c-status">${leadPill(l)}</div>
         <div class="c-summary summary">${esc(l.last_summary || '')}</div>
         <div><button class="small" data-call="${l.id}">Call</button></div>
-      </div>`).join('');
+      </div>`).join('') +
+      (totalLeads > leads.length ? `<div class="empty"><button id="loadMore">Show more (${leads.length} of ${totalLeads})</button></div>` : '');
   }
   $('#callSelected').disabled = !selected.size;
   $('#callSelected').textContent = selected.size ? `Call ${selected.size} selected` : 'Call selected';
@@ -393,16 +414,19 @@ $('#list').addEventListener('change', (e) => {
 });
 $('#list').addEventListener('click', (e) => {
   if (e.target.matches('input')) return;
+  if (e.target.id === 'loadMore') return loadLeads(true);
   const call = e.target.closest('[data-call]');
   if (call) return callOne(Number(call.dataset.call));
   const item = e.target.closest('.item[data-id]');
   if (item) openLead(Number(item.dataset.id));
 });
 
-async function callOne(id) {
-  const lead = leads.find((l) => l.id === id) || {};
-  if (!confirm(`Call ${lead.business_name || 'this business'} now?`)) return;
+// resetTries: a manual "Call now" from the business's page may go past the max-tries limit.
+async function callOne(id, { name, resetTries = false } = {}) {
+  name ??= (leads.find((l) => l.id === id) || {}).business_name;
+  if (!confirm(`Call ${name || 'this business'} now?`)) return;
   try {
+    if (resetTries) await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ attempts: 0 }) });
     await api(`/api/leads/${id}/call`, { method: 'POST', body: '{}' });
     toast('Calling… the result shows up here when the call ends.');
   } catch (err) { toast('Not called: ' + err.message); }
@@ -410,18 +434,25 @@ async function callOne(id) {
 }
 
 $('#callSelected').onclick = async () => {
-  if (!confirm(`Call ${selected.size} businesses? They'll be called one after another during calling hours.`)) return;
-  const r = await api('/api/call-batch', { method: 'POST', body: JSON.stringify({ ids: [...selected] }) });
-  const queued = r.results.filter((x) => x.queued).length;
-  const skipped = r.results.filter((x) => !x.queued);
-  toast(`${queued} added to the call list.` + (skipped.length ? ` ${skipped.length} skipped (${skipped[0].reason}).` : ''));
-  selected.clear();
+  if (!confirm(`Call ${selected.size} businesses? They'll be called one after another, each during its own calling hours.`)) return;
+  try {
+    const r = await api('/api/call-batch', { method: 'POST', body: JSON.stringify({ ids: [...selected] }) });
+    const queued = r.results.filter((x) => x.queued).length;
+    const skipped = r.results.filter((x) => !x.queued);
+    toast(`${queued} added to the call list.` + (skipped.length ? ` ${skipped.length} skipped (${skipped[0].reason}).` : ''));
+    selected.clear();
+  } catch (err) { toast('Not added: ' + err.message); }
   refresh();
 };
-$('#stopQueue').onclick = async () => { await api('/api/queue/clear', { method: 'POST' }); toast('Stopped. A call in progress will finish.'); refresh(); };
+$('#stopQueue').onclick = async () => {
+  if (!confirm('Stop calling? Everyone waiting is taken off the call list. A call in progress will finish.')) return;
+  await api('/api/queue/clear', { method: 'POST' });
+  toast('Stopped.');
+  refresh();
+};
 
 let searchT;
-$('#q').oninput = () => { clearTimeout(searchT); searchT = setTimeout(loadLeads, 250); };
+$('#q').oninput = () => { clearTimeout(searchT); selected.clear(); searchT = setTimeout(() => { leads = []; loadLeads(); }, 250); };
 
 // ---------- Upload (the sheet is read in the browser; only rows are sent) ----------
 $('#uploadBtn').onclick = () => $('#file').click();
@@ -430,9 +461,21 @@ $('#file').onchange = async () => {
   if (!f) return;
   try {
     const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
-    const r = await api('/api/import', { method: 'POST', body: JSON.stringify({ filename: f.name, rows: sheetRows(wb) }) });
-    toast(`Added ${r.imported} businesses.` + (r.skipped.length ? ` ${r.skipped.length} rows skipped (no name or phone).` : ''));
+    const [header, ...body] = sheetRows(wb);
+    if (!header || !body.length) throw new Error('The sheet looks empty.');
+    // Sent in small parts so big sheets stay inside the server's per-request limits.
+    const total = { imported: 0, skipped: 0, duplicates: 0 };
+    for (let i = 0; i < body.length; i += 40) {
+      toast(`Importing… ${Math.min(i + 40, body.length)} of ${body.length}`);
+      const r = await api('/api/import', { method: 'POST', body: JSON.stringify({ filename: f.name, rows: [header, ...body.slice(i, i + 40)] }) });
+      total.imported += r.imported;
+      total.skipped += r.skipped.length;
+      total.duplicates += r.duplicates || 0;
+    }
+    toast(`Added ${total.imported} businesses.` + (total.skipped ? ` ${total.skipped} rows skipped (no name or valid phone).` : '') +
+      (total.duplicates ? ` ${total.duplicates} duplicate rows merged.` : ''));
     group = 'all';
+    leads = [];
     refresh();
   } catch (err) { toast(err.message); }
   $('#file').value = '';
@@ -442,17 +485,21 @@ function sheetRows(wb) {
   if (!ws || !ws['!ref']) return [];
   const range = XLSX.utils.decode_range(ws['!ref']);
   const rows = [];
+  let linkCols = null;
   for (let r = range.s.r; r <= range.e.r; r++) {
     const row = [];
     for (let c = range.s.c; c <= range.e.c; c++) {
       const cell = ws[XLSX.utils.encode_cell({ r, c })];
-      let v = cell ? String(cell.w ?? cell.v ?? '').trim() : '';
-      // A cell showing "preview" that links somewhere: keep the link itself.
+      // Whole numbers (like phone numbers typed as numbers) keep every digit instead of "5.12E+9".
+      let v = !cell ? '' : cell.t === 'n' && Number.isInteger(cell.v) && Math.abs(cell.v) >= 1e6 ? String(cell.v) : String(cell.w ?? cell.v ?? '').trim();
+      // In link and email columns, a cell showing "preview" that links somewhere becomes the link itself.
       const target = cell?.l?.Target;
-      if (target && !/^https?:|^www\.|\.\w{2,}/i.test(v)) v = target.replace(/^mailto:/, '');
+      if (target && linkCols?.has(c) && !/^https?:|^www\.|\.\w{2,}/i.test(v)) v = target.replace(/^mailto:/, '');
       row.push(v);
     }
-    if (row.some(Boolean)) rows.push(row);
+    if (!row.some(Boolean)) continue;
+    if (!linkCols) linkCols = new Set(row.map((h, i) => (/demo|redesign|preview|mockup|website|site|url|link|e-?mail/i.test(h) && !/name/i.test(h) ? i + range.s.c : -1)).filter((i) => i >= 0));
+    rows.push(row);
   }
   return rows;
 }
@@ -466,11 +513,11 @@ async function openLead(id) {
     ['City', esc(lead.city)], ['Follow up', esc(lead.meeting_time)], ['Notes', esc(lead.notes)]].filter((r) => r[1]);
   $('#drawer').innerHTML = `
     <div class="row"><h2 style="margin:0;flex:1">${esc(lead.business_name)}</h2><button class="small" id="closeDrawer">Close</button></div>
-    <div style="margin-top:8px">${pill(lead.status)} <span class="muted">${lead.attempts} call${lead.attempts === 1 ? '' : 's'} so far</span></div>
+    <div style="margin-top:8px">${pill(lead.status)} <span class="muted">${Number(lead.attempts)} call${lead.attempts === 1 ? '' : 's'} so far</span></div>
     <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
     <div class="row">
       <button class="primary" id="dCall">Call now</button>
-      <select id="dStatus" style="width:auto">${Object.entries(STATUS).map(([k, [l]]) => `<option value="${k}" ${k === lead.status ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <select id="dStatus" style="width:auto">${Object.entries(STATUS).filter(([k]) => k !== 'calling' || lead.status === 'calling').map(([k, [l]]) => `<option value="${k}" ${k === lead.status ? 'selected' : ''} ${k === 'calling' ? 'disabled' : ''}>${l}</option>`).join('')}</select>
       <button class="small" id="dDelete" style="margin-left:auto">Delete</button>
     </div>
     <h3>Calls</h3>
@@ -486,8 +533,14 @@ async function openLead(id) {
       </div>`).join('') || '<p class="muted">Not called yet.</p>'}`;
   $('#drawer').classList.add('open');
   $('#closeDrawer').onclick = () => $('#drawer').classList.remove('open');
-  $('#dCall').onclick = async () => { await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ attempts: 0 }) }).catch(() => {}); await callOne(id); openLead(id); };
-  $('#dStatus').onchange = async () => { await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ status: $('#dStatus').value }) }); toast('Saved'); refresh(); };
+  $('#dCall').onclick = async () => { await callOne(id, { name: lead.business_name, resetTries: true }); openLead(id); };
+  $('#dStatus').onchange = async () => {
+    try {
+      await api(`/api/leads/${id}`, { method: 'PATCH', body: JSON.stringify({ status: $('#dStatus').value }) });
+      toast('Saved');
+    } catch (err) { toast(err.message); }
+    refresh();
+  };
   $('#dDelete').onclick = async () => {
     if (!confirm('Delete this business and its call history?')) return;
     await api(`/api/leads/${id}`, { method: 'DELETE' });
@@ -505,27 +558,37 @@ $('#days').innerHTML = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const DEFAULTS = { OPENAI_REALTIME_MODEL: 'gpt-realtime-mini', OPENAI_VOICE: 'marin', CALL_WINDOW_START: '9', CALL_WINDOW_END: '17',
   CALL_DAYS: '1,2,3,4,5', DEFAULT_TIMEZONE: 'America/New_York', DEFAULT_COUNTRY_CODE: '1', CALL_SPACING_SECONDS: '90', MAX_ATTEMPTS: '3', AGENT_NAME: 'Alex' };
 
+let loadedSettings = {};
 async function loadSettings() {
   const s = await api('/api/settings');
   const form = $('#settingsForm');
+  loadedSettings = {};
   for (const [key, value] of Object.entries(s)) {
     const el = form.elements[key];
     if (!el) continue;
     if (typeof value === 'object') { // secret: never shown, only whether it's set
       el.value = '';
       el.placeholder = value.set ? `Saved (${value.hint}). Leave empty to keep it.` : 'Not set yet';
-    } else {
-      el.value = value || DEFAULTS[key] || '';
+      continue;
     }
+    const v = value || DEFAULTS[key] || '';
+    // A value from .env that isn't in the list (e.g. another timezone) is kept, not silently replaced.
+    if (el.tagName === 'SELECT' && v && ![...el.options].some((o) => o.value === v)) el.add(new Option(v, v));
+    el.value = v;
+    loadedSettings[key] = el.value;
   }
   const days = (s.CALL_DAYS || DEFAULTS.CALL_DAYS).split(',');
   document.querySelectorAll('#days input').forEach((cb) => (cb.checked = days.includes(cb.value)));
+  loadedSettings.CALL_DAYS = days.join(',');
 }
 
 $('#settingsForm').onsubmit = async (e) => {
   e.preventDefault();
-  const data = Object.fromEntries(new FormData(e.target));
-  data.CALL_DAYS = [...document.querySelectorAll('#days input:checked')].map((cb) => cb.value).join(',');
+  const all = Object.fromEntries(new FormData(e.target));
+  all.CALL_DAYS = [...document.querySelectorAll('#days input:checked')].map((cb) => cb.value).join(',');
+  // Only what changed is saved, so values from .env / wrangler.jsonc keep applying to everything else.
+  const data = Object.fromEntries(Object.entries(all).filter(([k, v]) => (k in loadedSettings ? loadedSettings[k] !== v : v !== '')));
+  if (!Object.keys(data).length) { $('#saveResult').textContent = 'Nothing changed.'; return; }
   try {
     await api('/api/settings', { method: 'PUT', body: JSON.stringify(data) });
     $('#saveResult').textContent = 'Saved.';
@@ -537,8 +600,9 @@ $('#settingsForm').onsubmit = async (e) => {
 $('#testCall').onclick = async () => {
   $('#testResult').textContent = 'Calling…';
   try {
-    await api('/api/test-call', { method: 'POST', body: JSON.stringify({ phone: $('#testPhone').value, business_name: $('#testBusiness').value }) });
-    $('#testResult').textContent = 'Your phone should ring in a few seconds. The result appears under Businesses.';
+    const r = await api('/api/test-call', { method: 'POST', body: JSON.stringify({ phone: $('#testPhone').value, business_name: $('#testBusiness').value }) });
+    $('#testResult').innerHTML = 'Your phone should ring in a few seconds. <button class="small" id="testView">See the result</button>';
+    $('#testView').onclick = () => openLead(r.leadId);
   } catch (err) { $('#testResult').textContent = err.message; }
 };
 

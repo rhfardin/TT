@@ -1,3 +1,5 @@
+import { isValidTimezone } from './leads.js';
+
 // Settings the owner can change from the dashboard. Saved values override environment variables.
 export const SETTINGS = [
   { key: 'OPENAI_API_KEY', secret: true },
@@ -45,15 +47,39 @@ export function settingsForDashboard(env, saved) {
   return out;
 }
 
-// Blank secret fields mean "keep the current one".
-export function cleanSettingsUpdate(body) {
-  const out = {};
+const int = (min, max) => (v) => (/^\d+$/.test(v) && Number(v) >= min && Number(v) <= max ? null : `must be a whole number from ${min} to ${max}`);
+const VALIDATE = {
+  CALL_WINDOW_START: int(0, 23),
+  CALL_WINDOW_END: int(1, 24),
+  CALL_SPACING_SECONDS: int(10, 3600),
+  MAX_ATTEMPTS: int(1, 10),
+  DEFAULT_COUNTRY_CODE: (v) => (/^\d{1,3}$/.test(v) ? null : 'must be 1 to 3 digits, like 1'),
+  CALL_DAYS: (v) => (/^[1-7](,[1-7])*$/.test(v) ? null : 'pick at least one day'),
+  DEFAULT_TIMEZONE: (v) => (isValidTimezone(v) ? null : 'is not a timezone'),
+  TWILIO_FROM_NUMBER: (v) => (/^\+\d{8,15}$/.test(v) ? null : 'must look like +15551234567'),
+};
+const LABELS = {
+  CALL_WINDOW_START: 'Start hour', CALL_WINDOW_END: 'End hour', CALL_SPACING_SECONDS: 'Seconds between calls',
+  MAX_ATTEMPTS: 'Max tries', DEFAULT_COUNTRY_CODE: 'Country code', CALL_DAYS: 'Days', DEFAULT_TIMEZONE: 'Default timezone',
+  TWILIO_FROM_NUMBER: 'Twilio phone number',
+};
+
+// Blank secret fields mean "keep the current one"; blank normal fields mean "use the default".
+// current: the values in effect now, to check combinations like start hour < end hour.
+export function cleanSettingsUpdate(body, current = {}) {
+  const values = {};
+  const errors = [];
   for (const [key, raw] of Object.entries(body || {})) {
     const def = BY_KEY[key];
     if (!def) continue;
-    const value = String(raw ?? '').trim();
+    const value = String(raw ?? '').trim().slice(0, 10000);
     if (def.secret && !value) continue;
-    out[key] = value;
+    const problem = value && VALIDATE[key]?.(value);
+    if (problem) errors.push(`${LABELS[key]} ${problem}`);
+    else values[key] = value;
   }
-  return out;
+  const start = Number(values.CALL_WINDOW_START || current.CALL_WINDOW_START || 9);
+  const end = Number(values.CALL_WINDOW_END || current.CALL_WINDOW_END || 17);
+  if (start >= end) errors.push('Start hour must be before end hour');
+  return { values, errors };
 }

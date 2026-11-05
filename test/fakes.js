@@ -14,11 +14,18 @@ export async function startApp(env = {}) {
     sessionUpdates: [],
     fromAI: [], // every event the bridge sent to OpenAI
     onSession: null, // (ws) => void: what the fake model does once the session is configured
+    connectDelayMs: 0, // slow down the OpenAI handshake
+    connections: 0,
+    sms: [],
   };
 
-  const openai = new WebSocketServer({ port: 0 });
+  const openai = new WebSocketServer({
+    port: 0,
+    verifyClient: (info, cb) => setTimeout(() => cb(true), fake.connectDelayMs),
+  });
   await once(openai, 'listening');
   openai.on('connection', (ws) => {
+    fake.connections++;
     fake.openaiSocket = ws;
     ws.on('message', (raw) => {
       const ev = JSON.parse(raw);
@@ -35,6 +42,10 @@ export async function startApp(env = {}) {
     url = String(url);
     if (url.includes('api.twilio.com')) {
       const body = Object.fromEntries(new URLSearchParams(opts.body || ''));
+      if (url.endsWith('/Messages.json')) {
+        fake.sms.push(body);
+        return new Response(JSON.stringify({ sid: 'SM1' }), { status: 201 });
+      }
       if (url.endsWith('/Calls.json')) {
         fake.twilioCalls.push(body);
         return new Response(JSON.stringify({ sid: `CA${fake.twilioCalls.length}` }), { status: 201 });
@@ -77,7 +88,8 @@ export async function startApp(env = {}) {
   }
 
   // A fake Twilio media stream for a call placed through the API.
-  function mediaStream(twilioCall, { callSid } = {}) {
+  // autoAck: confirm audio marks right away (as if playback were instant); false = test does it.
+  function mediaStream(twilioCall, { callSid, autoAck = true } = {}) {
     const params = Object.fromEntries([...twilioCall.Twiml.matchAll(/name="(\w+)" value="([^"]+)"/g)].map((m) => [m[1], m[2]]));
     const wsUrl = twilioCall.Twiml.match(/url="([^"]+)"/)[1].replace(/^wss?:\/\/[^/]+/, `ws://127.0.0.1:${server.address().port}`);
     const ws = new WebSocket(wsUrl);
@@ -85,7 +97,7 @@ export async function startApp(env = {}) {
     ws.on('message', (raw) => {
       const m = JSON.parse(raw);
       received.push(m);
-      if (m.event === 'mark') setTimeout(() => ws.readyState === 1 && ws.send(JSON.stringify({ event: 'mark', mark: m.mark })), 5);
+      if (m.event === 'mark' && autoAck) setTimeout(() => ws.readyState === 1 && ws.send(JSON.stringify({ event: 'mark', mark: m.mark })), 5);
     });
     const ready = once(ws, 'open').then(() => {
       ws.send(JSON.stringify({ event: 'start', start: { streamSid: 'MZ1', callSid: callSid ?? `CA${fake.twilioCalls.indexOf(twilioCall) + 1}`, customParameters: params } }));

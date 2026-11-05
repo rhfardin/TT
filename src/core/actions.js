@@ -44,8 +44,10 @@ export async function placeCall(ctx, leadId, opts = {}) {
   if (!check.ok) return { ok: false, error: check.reason };
   const problem = providerProblem(config);
   if (problem) return { ok: false, error: problem };
-
-  await store.updateLead(lead.id, { status: 'calling', attempts: lead.attempts + 1, last_called_at: new Date().toISOString() });
+  // Atomic, so a manual call and the queue can never ring the same business twice.
+  if (!(await store.claimLeadForCall(lead.id, config.calling.maxAttempts))) {
+    return { ok: false, error: 'this business is already being called' };
+  }
   const callId = await store.insertCall(lead.id);
   try {
     let conversationId = null;
@@ -93,22 +95,43 @@ export async function recordCallResult(ctx, callId, { summary, transcript, outco
   await store.logEvent(lead.id, 'call_completed', { outcome, duration });
 }
 
-export async function recordNotConnected(ctx, callId, reason) {
+// status: 'no_answer' (didn't pick up, busy) or 'failed' (something broke).
+export async function recordNotConnected(ctx, callId, reason, status = 'no_answer') {
   const { store } = ctx;
   const call = await store.getCall(callId);
   if (!call || call.status === 'completed') return;
-  await store.updateCall(callId, { status: 'no_answer', error: String(reason), ended_at: nowSql() });
+  await store.updateCall(callId, { status, error: String(reason), ended_at: nowSql() });
   const lead = await store.getLead(call.lead_id);
   if (lead?.status === 'calling') await store.updateLead(lead.id, { status: 'no_answer' });
   await store.logEvent(call.lead_id, 'call_not_connected', reason);
 }
 
+// Twilio's call status callback (OpenAI provider).
+export async function handleTwilioStatus(ctx, callId, params) {
+  const status = params.CallStatus;
+  if (['no-answer', 'busy', 'failed', 'canceled'].includes(status)) {
+    await recordNotConnected(ctx, callId, status, status === 'failed' ? 'failed' : 'no_answer');
+  } else if (status === 'completed') {
+    // Answered, but our audio stream never connected (wrong PUBLIC_URL, proxy without websockets...).
+    const call = await ctx.store.getCall(callId);
+    if (call && ['initiated', 'ringing'].includes(call.status)) {
+      await recordNotConnected(ctx, callId, 'the call was answered but the AI audio never connected; check PUBLIC_URL', 'failed');
+    }
+  }
+}
+
 // ---- Things the AI can do during the call ----
 
-export async function sendDemoLink(ctx, { lead_id, email, phone, contact_name, channel }) {
+// Only these arguments are used; the texted number is always the business's own number.
+export async function sendDemoLink(ctx, { lead_id, email, contact_name, channel }) {
   const { config, store } = ctx;
   const lead = await store.getLead(lead_id);
   if (!lead) return { ok: false, message: 'Could not find that business in the system.' };
+  if (!lead.demo_link) {
+    await store.logEvent(lead.id, 'demo_link_missing', 'no redesign link in the sheet');
+    return { ok: false, message: `There is no preview link on file for this business. Tell them ${config.seller.yourName || 'the team'} will email it personally today.` };
+  }
+  email = typeof email === 'string' ? email.trim() : '';
   const sent = [];
   const text = followUpMessage(lead, contact_name || lead.contact_name, config.seller);
 
@@ -125,7 +148,7 @@ export async function sendDemoLink(ctx, { lead_id, email, phone, contact_name, c
 
   const tw = config.twilio;
   if (channel === 'sms' || channel === 'both') {
-    const toPhone = (phone || lead.phone || '').trim();
+    const toPhone = lead.phone;
     if (tw.accountSid && tw.authToken && tw.fromNumber && toPhone) {
       try {
         await sendSms(tw, toPhone, text);
@@ -136,7 +159,7 @@ export async function sendDemoLink(ctx, { lead_id, email, phone, contact_name, c
     }
   }
 
-  await store.logEvent(lead.id, 'demo_link_sent', { sent, requested: { email, phone, channel } });
+  await store.logEvent(lead.id, 'demo_link_sent', { sent, requested: { email, channel } });
   if (!sent.length) {
     return { ok: false, message: 'The link could not be sent automatically. Tell them the team will send it over shortly.' };
   }
@@ -180,7 +203,8 @@ export async function analyzeCall(config, lead, transcript, endReason) {
   });
   const body = await res.json();
   if (!res.ok) throw new Error(body.error?.message || `HTTP ${res.status}`);
-  return JSON.parse(body.choices[0].message.content);
+  const parsed = JSON.parse(body.choices?.[0]?.message?.content || 'null');
+  return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
 // ---- ElevenLabs post-call webhook ----
@@ -188,8 +212,8 @@ export async function analyzeCall(config, lead, transcript, endReason) {
 // Header "ElevenLabs-Signature: t=<unix>,v0=<hex>", hex = HMAC-SHA256(secret, `${t}.${rawBody}`).
 export async function verifyElevenLabsSignature(config, rawBody, header) {
   const secret = config.elevenlabs.webhookSecret;
-  if (!secret) return true; // not configured: accept (set the secret in production!)
-  if (!header) return false;
+  // Without a secret anyone could post fake call results, so the webhook is closed until one is set.
+  if (config.voiceProvider !== 'elevenlabs' || !secret || !header) return false;
   const parts = Object.fromEntries(header.split(',').map((p) => p.trim().split('=')));
   const t = Number(parts.t);
   if (!t || !parts.v0 || Math.abs(Date.now() / 1000 - t) > 30 * 60) return false;
