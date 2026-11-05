@@ -154,7 +154,8 @@ async function handle(request, env, waitUntil) {
   }
 
   if (path === '/healthz') return new Response('ok');
-  return env.ASSETS.fetch(request);
+  // Files in public/ are usually served before the Worker runs; anything else ends up here.
+  return env.ASSETS ? env.ASSETS.fetch(request) : new Response('Not found', { status: 404 });
 }
 
 // One instance per phone call: bridges Twilio audio to the OpenAI Realtime API.

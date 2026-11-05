@@ -4,7 +4,7 @@
   "name": "ai-caller",
   "main": "worker/index.js",
   "compatibility_date": "2025-09-01",
-  "assets": { "directory": "./public" },
+  "assets": { "directory": "./public", "binding": "ASSETS" },
   "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
 
   // Create it with: npx wrangler d1 create ai-caller   (then paste the database_id here)
