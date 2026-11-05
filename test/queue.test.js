@@ -81,3 +81,27 @@ test('two calls for the same lead at once: only one goes through', async () => {
   assert.equal([a.ok, b.ok].filter(Boolean).length, 1);
   assert.equal(calls.length, 1);
 });
+
+test('no answer from a business in the call list schedules a retry inside its calling hours', async () => {
+  const { ctx, db, store } = await setup({ ...HOURS, RETRY_NO_ANSWER_HOURS: '24' });
+  await enqueueLeads(ctx, [1]);
+  const callId = await store.insertCall(1);
+  await store.updateLead(1, { status: 'calling', attempts: 1 });
+  const { recordNotConnected } = await import('../src/core/actions.js');
+  await recordNotConnected(ctx, callId, 'no-answer');
+  const item = await db.get('SELECT * FROM queue_items WHERE lead_id = 1');
+  assert.ok(item, 'retry queued');
+  const at = new Date(item.not_before);
+  assert.ok(at - Date.now() > 20 * 3600 * 1000, 'about a day later');
+  const { canCallNow } = await import('../src/core/leads.js');
+  assert.equal(canCallNow(await store.getLead(1), ctx.config.calling, at).ok, true, 'inside calling hours');
+});
+
+test('manual one-off calls and test calls are not retried', async () => {
+  const { ctx, db, store } = await setup();
+  const callId = await store.insertCall(1);
+  await store.updateLead(1, { status: 'calling', attempts: 1 });
+  const { recordNotConnected } = await import('../src/core/actions.js');
+  await recordNotConnected(ctx, callId, 'busy');
+  assert.equal((await db.get('SELECT COUNT(*) AS n FROM queue_items')).n, 0);
+});

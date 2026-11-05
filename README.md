@@ -14,13 +14,18 @@ Your sheet (.xlsx/.csv) ──► Dashboard (your domain) ──► "Call" ─�
 ## What it does
 
 - **Import your sheet.** Columns are detected automatically: business name, phone, owner/contact, email, current website, redesign/demo link, category (dental, med spa…), city, timezone, notes/details. Other columns are kept too. Uploading again updates businesses by phone number.
-- **Call when you say so.** Use "Call" on one business, or tick several and use "Call selected". Queued calls go out one at a time, `CALL_SPACING_SECONDS` apart.
+- **Call when you say so.** Use "Call" on one business, or tick several and use "Call selected". Calls go out one at a time, `CALL_SPACING_SECONDS` apart, each during *that business's* calling hours: a list added at night waits until the morning. The list is saved in the database, so a restart doesn't lose it, and **Stop** clears it.
+- **Right local time.** The timezone comes from the sheet ("America/Chicago", "Central", "PST" all work), otherwise from the phone's area code, otherwise from your default. A Los Angeles business isn't called at 9 am New York time.
+- **Voicemail detection.** Twilio detects answering machines in the first seconds; the AI waits 2 seconds before speaking, so it usually hangs up before saying a word. No message is left.
+- **Automatic retries.** Businesses in your call list that don't answer or go to voicemail are called again later (24 h / 48 h by default), at a different time of day each try, up to the max tries.
+- **Recordings (optional).** Turn on in Settings to play calls back in the dashboard; the AI then says the call is recorded.
 - **Personalized pitch.** Each call gets the business's name, category, city, current site and your notes. The script is in [`prompts/sales-agent.md`](prompts/sales-agent.md); edit it freely.
 - **Closes on the call.** When they agree, the AI sends the preview link and your booking/payment links by email (or SMS) during the call.
 - **Results.** Each call stores the transcript, a summary, the outcome (`link_sent`, `interested`, `callback`, `not_interested`, `voicemail`, `do_not_call`, `sold`), any follow-up time or email they gave, and a suggested next step.
 - **Settings page.** API keys, your name and price, voice, and calling hours are all set in the dashboard. Keys are saved on your server and never shown again in full. Values saved there override `.env` / `wrangler.jsonc`.
 - **Test call.** Settings has a **Call me now** button that calls your own phone with a pretend business, at any time of day.
-- **Safety rails.** The AI says it is an AI. It only calls inside your calling hours in the business's timezone. It stops after `MAX_ATTEMPTS` tries. "Don't call me again" puts the business on the do-not-call list permanently. It hangs up on voicemail without leaving a message.
+- **Safety rails.** The AI says it is an AI. It only calls inside your calling hours in the business's timezone. It stops after `MAX_ATTEMPTS` tries. "Don't call me again" puts the business on the do-not-call list permanently. Calls are capped at a maximum length (7 minutes by default) and the AI wraps up before it.
+- **Security.** The dashboard uses login sessions that expire after 30 days (logging out ends them) and locks for 10 minutes after 5 wrong passwords. Twilio and ElevenLabs callbacks must be signed, or they're rejected.
 
 ## Which voice AI? (cost per minute, late 2026, check current prices)
 
@@ -108,6 +113,8 @@ Add yourself as a row in the sheet (with your own phone number), upload it, and 
 3. Workspace settings → **Post-call webhook** → `https://<domain>/webhooks/elevenlabs`. Copy its secret to `ELEVENLABS_WEBHOOK_SECRET`.
 4. Copy the agent ID and API key into `.env` and set `VOICE_PROVIDER=elevenlabs`.
 
+With ElevenLabs, Twilio's voicemail detection and the Settings recording switch don't apply, because ElevenLabs places the call. Turn on the agent's **Voicemail detection** system tool and recording in ElevenLabs instead. The call queue, calling hours and automatic retries work the same with both.
+
 ## Calling the right way (read this)
 
 This makes calls with an AI voice, and phone rules are strict about that. In the US, the FCC treats AI voices as "artificial voice" under the TCPA. Calling **cell phones** with one requires prior consent, and penalties are $500–$1,500 per call. Many small-business "business numbers" are really the owner's cell. To stay safe:
@@ -118,17 +125,28 @@ This makes calls with an AI voice, and phone rules are strict about that. In the
 - If you turn on `RECORD_CALLS`, some states (CA, FL, WA, PA…) need **everyone** on the call to agree to recording. Add that to the opening.
 - Outside the US, rules differ (for example, the UK and EU are stricter). Check your country's rules, and talk to a lawyer before calling at volume.
 
+## Tests
+
+```bash
+npm test
+```
+Runs the whole system against fake Twilio, OpenAI and email: importing, the call queue and calling hours, a full call (talking, interruptions, tools, hang-up), voicemail detection, retries, recordings, login security and settings. No accounts or network needed.
+
 ## Project layout
 
 ```
 src/core/             all calling logic, shared by both versions
   leads.js            sheet columns → leads, phone numbers, calling hours
+  areacodes.js        phone area code → timezone
+  queue.js            the call queue (one call at a time, calling hours, retries)
+  schema.js           database tables and migrations
   agent.js            AI tools, outcomes, follow-up message
   actions.js          placing calls, mid-call tools, results, ElevenLabs webhook
   bridge.js           Twilio phone audio <-> OpenAI Realtime voice
   api.js              dashboard API
   store.js            database queries (SQLite on Node, D1 on Cloudflare)
 src/server.js         Node server (Docker / VPS / your computer)
+test/                 automated tests (npm test)
 worker/index.js       Cloudflare Worker + Durable Objects
 wrangler.jsonc        Cloudflare settings
 prompts/sales-agent.md  the sales script (edit this!)

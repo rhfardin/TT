@@ -10,7 +10,7 @@ import { migrate } from './core/schema.js';
 import { createStore } from './core/store.js';
 import { handleRequest } from './core/api.js';
 import { runDue } from './core/queue.js';
-import { handleTwilioStatus, verifyElevenLabsSignature, handleElevenLabsWebhook } from './core/actions.js';
+import { handleTwilioStatus, handleTwilioAmd, handleTwilioRecording, verifyElevenLabsSignature, handleElevenLabsWebhook } from './core/actions.js';
 import { validTwilioSignature } from './core/twilio.js';
 import { resendSender, textToHtml } from './core/email.js';
 import { CallBridge } from './core/bridge.js';
@@ -109,6 +109,8 @@ const twilioRoute = (handler) => [express.urlencoded({ extended: false }), route
   res.type('text/xml').send('<Response/>');
 })];
 app.post('/twilio/status', ...twilioRoute(handleTwilioStatus));
+app.post('/twilio/amd', ...twilioRoute(handleTwilioAmd));
+app.post('/twilio/recording', ...twilioRoute(handleTwilioRecording));
 
 app.use(['/api', '/tools'], express.json({ limit: '20mb' }), route(async (req, res) => {
   const r = await handleRequest(await makeCtx(), {
@@ -119,6 +121,7 @@ app.use(['/api', '/tools'], express.json({ limit: '20mb' }), route(async (req, r
     ip: req.ip,
     headers: { cookie: req.get('cookie'), 'x-tool-secret': req.get('x-tool-secret'), 'x-requested-with': req.get('x-requested-with') },
   });
+  if (r.raw) return res.status(r.status).type(r.raw.contentType).send(Buffer.from(r.raw.body));
   res.set(r.headers || {}).status(r.status).json(r.json);
 }));
 

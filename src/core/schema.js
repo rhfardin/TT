@@ -81,6 +81,14 @@ export const MIGRATIONS = [
       "UPDATE leads SET status = CASE WHEN attempts > 0 THEN 'no_answer' ELSE 'new' END WHERE status = 'queued'",
     ],
   },
+  {
+    // Voicemail detection result and call recordings.
+    version: 4,
+    statements: [
+      'ALTER TABLE calls ADD COLUMN answered_by TEXT',
+      'ALTER TABLE calls ADD COLUMN recording_sid TEXT',
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.at(-1).version;

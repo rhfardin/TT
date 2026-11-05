@@ -1,8 +1,8 @@
 // Everything that happens around a call, shared by the Node server and the Cloudflare Worker.
 // ctx = { config, store, sendEmail?(to, subject, text) }
-import { checkLead } from './leads.js';
+import { checkLead, nextWindowStart, FINAL_STATUSES } from './leads.js';
 import { promptVariables, followUpMessage, OUTCOME_STATUS, OUTCOMES } from './agent.js';
-import { createStreamingCall, sendSms } from './twilio.js';
+import { createStreamingCall, sendSms, hangUp } from './twilio.js';
 import { hmacHex, safeEqual } from './crypto.js';
 
 export function providerProblem(config) {
@@ -93,6 +93,28 @@ export async function recordCallResult(ctx, callId, { summary, transcript, outco
   if (collected.decision_maker_name && !lead.contact_name) fields.contact_name = String(collected.decision_maker_name);
   await store.updateLead(lead.id, fields);
   await store.logEvent(lead.id, 'call_completed', { outcome, duration });
+  if (fields.status === 'no_answer' || fields.status === 'voicemail') await scheduleRetry(ctx, lead.id, fields.status);
+}
+
+export const isMachine = (answeredBy) => /^(machine|fax)/.test(String(answeredBy || ''));
+
+export const recordVoicemail = (ctx, callId, duration = null) => recordCallResult(ctx, callId, {
+  summary: 'Reached voicemail or an answering machine; hung up without leaving a message.',
+  transcript: [], outcome: 'voicemail', duration,
+});
+
+// Businesses in the call list get called again later, at a different time of day each try.
+export async function scheduleRetry(ctx, leadId, reason) {
+  const { store, config } = ctx;
+  const lead = await store.getLead(leadId);
+  if (!lead?.in_campaign || lead.is_test || FINAL_STATUSES.includes(lead.status)) return;
+  if (lead.attempts >= config.calling.maxAttempts) return;
+  const hours = reason === 'voicemail' ? config.calling.retryVoicemailHours : config.calling.retryNoAnswerHours;
+  const shift = lead.attempts % 2 ? 3 : -2;
+  const at = nextWindowStart(lead, config.calling, new Date(Date.now() + (hours + shift) * 3600 * 1000));
+  await store.scheduleLead(lead.id, at.toISOString(), `retry after ${reason}`);
+  await store.logEvent(lead.id, 'retry_scheduled', at.toISOString());
+  await ctx.queue?.poke?.();
 }
 
 // status: 'no_answer' (didn't pick up, busy) or 'failed' (something broke).
@@ -104,6 +126,7 @@ export async function recordNotConnected(ctx, callId, reason, status = 'no_answe
   const lead = await store.getLead(call.lead_id);
   if (lead?.status === 'calling') await store.updateLead(lead.id, { status: 'no_answer' });
   await store.logEvent(call.lead_id, 'call_not_connected', reason);
+  if (status === 'no_answer' && lead?.status === 'calling') await scheduleRetry(ctx, call.lead_id, 'no_answer');
 }
 
 // Twilio's call status callback (OpenAI provider).
@@ -114,9 +137,30 @@ export async function handleTwilioStatus(ctx, callId, params) {
   } else if (status === 'completed') {
     // Answered, but our audio stream never connected (wrong PUBLIC_URL, proxy without websockets...).
     const call = await ctx.store.getCall(callId);
-    if (call && ['initiated', 'ringing'].includes(call.status)) {
+    if (call && ['initiated', 'ringing'].includes(call.status) && !isMachine(call.answered_by)) {
       await recordNotConnected(ctx, callId, 'the call was answered but the AI audio never connected; check PUBLIC_URL', 'failed');
     }
+  }
+}
+
+// Twilio's answering machine detection result (OpenAI provider).
+export async function handleTwilioAmd(ctx, callId, params) {
+  const call = await ctx.store.getCall(callId);
+  if (!call) return;
+  await ctx.store.updateCall(callId, { answered_by: params.AnsweredBy || 'unknown' });
+  if (!isMachine(params.AnsweredBy)) return;
+  try {
+    await hangUp(ctx.config.twilio, call.call_sid || params.CallSid);
+  } catch (err) {
+    await ctx.store.logEvent(call.lead_id, 'hangup_failed', err.message);
+  }
+  // If the AI audio never started, record it here; otherwise the bridge does when the stream closes.
+  if (['initiated', 'ringing'].includes(call.status)) await recordVoicemail(ctx, callId);
+}
+
+export async function handleTwilioRecording(ctx, callId, params) {
+  if (params.RecordingSid && params.RecordingStatus === 'completed') {
+    await ctx.store.updateCall(callId, { recording_sid: params.RecordingSid });
   }
 }
 

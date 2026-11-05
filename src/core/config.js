@@ -64,6 +64,11 @@ export function buildConfig(e) {
       spacingSeconds: Number(env('CALL_SPACING_SECONDS', '90')),
       maxAttempts: Number(env('MAX_ATTEMPTS', '3')),
       maxCallSeconds: Number(env('MAX_CALL_SECONDS', '420')),
+      // Twilio answering machine detection: hang up on voicemail within a few seconds.
+      amdEnabled: env('AMD_ENABLED', 'true') === 'true',
+      // Automatic retries for businesses in the call list (never for test calls or manual one-offs).
+      retryNoAnswerHours: Number(env('RETRY_NO_ANSWER_HOURS', '24')),
+      retryVoicemailHours: Number(env('RETRY_VOICEMAIL_HOURS', '48')),
     },
 
     email: {

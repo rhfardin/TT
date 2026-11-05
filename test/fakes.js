@@ -50,6 +50,7 @@ export async function startApp(env = {}) {
         fake.twilioCalls.push(body);
         return new Response(JSON.stringify({ sid: `CA${fake.twilioCalls.length}` }), { status: 201 });
       }
+      if (/\/Recordings\/\w+\.mp3$/.test(url)) return new Response(new Uint8Array([0x49, 0x44, 0x33]), { status: 200 });
       const m = url.match(/\/Calls\/(\w+)\.json$/);
       if (m) {
         fake.hangups.push(m[1]);

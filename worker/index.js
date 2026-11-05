@@ -7,7 +7,7 @@ import { migrate } from '../src/core/schema.js';
 import { createStore } from '../src/core/store.js';
 import { handleRequest } from '../src/core/api.js';
 import { runDue } from '../src/core/queue.js';
-import { handleTwilioStatus, verifyElevenLabsSignature, handleElevenLabsWebhook } from '../src/core/actions.js';
+import { handleTwilioStatus, handleTwilioAmd, handleTwilioRecording, verifyElevenLabsSignature, handleElevenLabsWebhook } from '../src/core/actions.js';
 import { validTwilioSignature } from '../src/core/twilio.js';
 import { resendSender } from '../src/core/email.js';
 import { CallBridge } from '../src/core/bridge.js';
@@ -95,7 +95,7 @@ async function handle(request, env) {
   }
 
   // Twilio callbacks are signed with the auth token; anything unsigned is rejected.
-  const twilioHandlers = { '/twilio/status': handleTwilioStatus };
+  const twilioHandlers = { '/twilio/status': handleTwilioStatus, '/twilio/amd': handleTwilioAmd, '/twilio/recording': handleTwilioRecording };
   if (request.method === 'POST' && twilioHandlers[path]) {
     const params = Object.fromEntries(new URLSearchParams(await request.text()));
     const fullUrl = `${ctx.config.publicUrl}${path}${url.search}`;
@@ -121,6 +121,7 @@ async function handle(request, env) {
         'x-requested-with': request.headers.get('x-requested-with') || '',
       },
     });
+    if (r.raw) return new Response(r.raw.body, { status: r.status, headers: { 'Content-Type': r.raw.contentType } });
     return json(r.json, r.status, r.headers);
   }
 

@@ -6,7 +6,7 @@ import { UPSERT_LEAD_SQL, upsertArgs, FINAL_STATUSES } from './leads.js';
 const LEAD_COLUMNS = new Set(['business_name', 'contact_name', 'phone', 'email', 'website', 'demo_link', 'category',
   'city', 'timezone', 'notes', 'status', 'attempts', 'last_called_at', 'last_summary', 'meeting_time', 'is_test', 'in_campaign']);
 const CALL_COLUMNS = new Set(['conversation_id', 'call_sid', 'status', 'error', 'duration_secs', 'summary',
-  'transcript', 'outcome', 'ended_at']);
+  'transcript', 'outcome', 'ended_at', 'answered_by', 'recording_sid']);
 
 function setClause(fields, allowed) {
   const keys = Object.keys(fields).filter((k) => allowed.has(k));
@@ -96,6 +96,7 @@ export function createStore(db) {
     },
 
     // ---- Call queue ----
+    nextCallAt: async (leadId) => (await db.get('SELECT not_before FROM queue_items WHERE lead_id = ?', Number(leadId)))?.not_before ?? null,
     queuedLeadIds: async (list) =>
       (await db.all('SELECT lead_id FROM queue_items WHERE lead_id IN (SELECT value FROM json_each(?))', ids(list))).map((r) => r.lead_id),
     enqueueMany: (list, notBeforeIso, ignoreWindow, reason) =>

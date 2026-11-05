@@ -27,15 +27,40 @@ export async function createStreamingCall(config, { to, callId }) {
   const twiml = `<Response><Connect><Stream url="${xmlAttr(wsUrl)}">` +
     `<Parameter name="callId" value="${callId}"/><Parameter name="token" value="${await streamToken(tw, callId)}"/>` +
     '</Stream></Connect></Response>';
-  return post(tw, '/Calls.json', {
+  const params = {
     To: to,
     From: tw.fromNumber,
     Twiml: twiml,
     StatusCallback: `${config.publicUrl}/twilio/status?call=${callId}`,
     Timeout: '25', // seconds to ring
     TimeLimit: String(config.calling.maxCallSeconds),
-    Record: config.recordCalls ? 'true' : 'false',
+  };
+  if (config.calling.amdEnabled) {
+    // Detection runs in the background while the call is already connected to the AI.
+    Object.assign(params, {
+      MachineDetection: 'Enable',
+      AsyncAmd: 'true',
+      AsyncAmdStatusCallback: `${config.publicUrl}/twilio/amd?call=${callId}`,
+      AsyncAmdStatusCallbackMethod: 'POST',
+    });
+  }
+  if (config.recordCalls) {
+    Object.assign(params, {
+      Record: 'true',
+      RecordingStatusCallback: `${config.publicUrl}/twilio/recording?call=${callId}`,
+      RecordingStatusCallbackEvent: 'completed',
+    });
+  }
+  return post(tw, '/Calls.json', params);
+}
+
+// The MP3 of a finished recording (Twilio requires the account's credentials to download it).
+export async function fetchRecording(tw, recordingSid) {
+  const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(tw.accountSid)}/Recordings/${encodeURIComponent(recordingSid)}.mp3`, {
+    headers: { Authorization: 'Basic ' + btoa(`${tw.accountSid}:${tw.authToken}`) },
   });
+  if (!res.ok) throw new Error(`Twilio HTTP ${res.status}`);
+  return res.arrayBuffer();
 }
 
 export const hangUp = (tw, callSid) => post(tw, `/Calls/${encodeURIComponent(callSid)}.json`, { Status: 'completed' });

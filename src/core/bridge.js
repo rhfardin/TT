@@ -8,11 +8,20 @@
 // Every public method catches its own errors: a failing call must never crash the server.
 import { renderPrompt, firstGreeting, REALTIME_TOOLS } from './agent.js';
 import { streamToken, hangUp } from './twilio.js';
-import { sendDemoLink, markDoNotCall, recordCallResult, analyzeCall } from './actions.js';
+import { sendDemoLink, markDoNotCall, recordCallResult, recordVoicemail, analyzeCall, isMachine } from './actions.js';
 import { safeEqual } from './crypto.js';
 
 // Duration of a base64 chunk of 8 kHz mu-law audio (1 byte per sample).
 const audioMs = (b64) => ((b64.length * 3) / 4 - (b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0)) / 8;
+
+// With voicemail detection on, the AI waits this long before it may speak, so an answering machine
+// is usually hung up on before the AI says a word. A person saying "Hello?" just hears a short pause.
+const AMD_GUARD_MS = 2000;
+
+const turnDetection = (createResponse) =>
+  // semantic_vad waits until the person has actually finished their thought, instead of
+  // jumping in after a fixed pause, which is a big part of sounding human.
+  ({ type: 'semantic_vad', eagerness: 'auto', create_response: createResponse, interrupt_response: true });
 
 const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => obj?.[k] !== undefined).map((k) => [k, obj[k]]));
 
@@ -110,20 +119,20 @@ export class CallBridge {
     }
     // The caller hung up while we were connecting: don't leave a paid AI session running.
     if (this.closed) return this.openai.close();
+    const guard = this.config.calling.amdEnabled;
     this.sendOpenAI({
       type: 'session.update',
       session: {
         type: 'realtime',
         model: realtimeModel,
         output_modalities: ['audio'],
-        instructions: renderPrompt(this.promptTemplate, this.lead, this.config.seller),
+        instructions: renderPrompt(this.promptTemplate, this.lead, this.config.seller, { recording: this.config.recordCalls }),
         audio: {
           input: {
             format: { type: 'audio/pcmu' },
             transcription: { model: 'gpt-4o-mini-transcribe' },
-            // semantic_vad waits until the person has actually finished their thought, instead of
-            // jumping in after a fixed pause, which is a big part of sounding human.
-            turn_detection: { type: 'semantic_vad', eagerness: 'auto', create_response: true, interrupt_response: true },
+            noise_reduction: { type: 'near_field' }, // phone audio held close to the mouth
+            turn_detection: turnDetection(!guard),
           },
           output: { format: { type: 'audio/pcmu' }, voice },
         },
@@ -131,12 +140,27 @@ export class CallBridge {
         tool_choice: 'auto',
       },
     });
+    if (guard) {
+      this.guardActive = true;
+      this.later(AMD_GUARD_MS, () => {
+        this.guardActive = false;
+        this.sendOpenAI({ type: 'session.update', session: { type: 'realtime', audio: { input: { turn_detection: turnDetection(true) } } } });
+        // They already said "Hello?" during the pause: answer it now.
+        if (this.heardDuringGuard) this.sendOpenAI({ type: 'response.create' });
+      });
+    }
     // People usually answer with "Hello?" first. If they stay silent, open the call ourselves.
     this.greetTimer = this.later(3500, () => {
       if (!this.userSpoke) {
         this.sendOpenAI({ type: 'response.create', response: { instructions: `Say, warmly and casually: "${firstGreeting(this.lead)}"` } });
       }
     });
+    // Wrap up politely before the call's time limit, then hang up.
+    const limitMs = this.config.calling.maxCallSeconds * 1000;
+    this.later(Math.max(limitMs - 30000, 10000), () => this.sendOpenAI({ type: 'response.create', response: {
+      instructions: 'The call is almost out of time. Briefly wrap up: confirm the next step, say a warm goodbye, then call end_call.',
+    } }));
+    this.later(Math.max(limitMs - 3000, 15000), () => this.hangup());
   }
 
   logError(err) {
@@ -165,6 +189,9 @@ export class CallBridge {
       case 'response.output_audio.delta':
       case 'response.audio.delta':
         this.playAudio(ev);
+        break;
+      case 'input_audio_buffer.committed':
+        if (this.guardActive) this.heardDuringGuard = true;
         break;
       case 'input_audio_buffer.speech_started':
         this.userSpoke = true;
@@ -266,6 +293,9 @@ export class CallBridge {
     this.finished = true;
     try {
       const duration = this.elapsed();
+      // Voicemail detection fired during the call: no need to analyse a greeting message.
+      const call = await this.ctx.store.getCall(this.callId);
+      if (isMachine(call?.answered_by)) return await recordVoicemail(this.ctx, this.callId, duration);
       let analysis = {};
       try {
         analysis = (await analyzeCall(this.config, this.lead, this.transcript, this.endReason)) ?? {};

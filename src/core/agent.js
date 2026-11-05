@@ -45,9 +45,14 @@ export function promptVariables(lead, seller) {
   };
 }
 
-export function renderPrompt(template, lead, seller) {
+// recording: calls are recorded, so the AI must say so (some US states require everyone's consent).
+export function renderPrompt(template, lead, seller, { recording = false } = {}) {
   const vars = promptVariables(lead, seller);
-  const extra = lead.email ? `\n\n# Email on file\nThe email we have on file is ${lead.email}. Confirm it before sending.` : '';
+  let extra = lead.email ? `\n\n# Email on file\nThe email we have on file is ${lead.email}. Confirm it before sending.` : '';
+  if (recording) {
+    extra += '\n\n# This call is recorded\nIn your opening, right after saying you are an AI, add "and just so you know, this call is recorded." ' +
+      'If they object, apologize, tell them you will make a note, and continue only if they are fine with it.';
+  }
   return template.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? '') + extra;
 }
 

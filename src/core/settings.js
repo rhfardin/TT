@@ -34,6 +34,11 @@ export const SETTINGS = [
   { key: 'CALL_DAYS' },
   { key: 'CALL_SPACING_SECONDS' },
   { key: 'MAX_ATTEMPTS' },
+  { key: 'MAX_CALL_SECONDS' },
+  { key: 'AMD_ENABLED' },
+  { key: 'RETRY_NO_ANSWER_HOURS' },
+  { key: 'RETRY_VOICEMAIL_HOURS' },
+  { key: 'RECORD_CALLS' },
 ];
 const BY_KEY = Object.fromEntries(SETTINGS.map((s) => [s.key, s]));
 
@@ -56,12 +61,18 @@ const VALIDATE = {
   DEFAULT_COUNTRY_CODE: (v) => (/^\d{1,3}$/.test(v) ? null : 'must be 1 to 3 digits, like 1'),
   CALL_DAYS: (v) => (/^[1-7](,[1-7])*$/.test(v) ? null : 'pick at least one day'),
   DEFAULT_TIMEZONE: (v) => (isValidTimezone(v) ? null : 'is not a timezone'),
+  MAX_CALL_SECONDS: int(60, 1800),
+  RETRY_NO_ANSWER_HOURS: int(1, 336),
+  RETRY_VOICEMAIL_HOURS: int(1, 336),
+  AMD_ENABLED: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
+  RECORD_CALLS: (v) => (['true', 'false'].includes(v) ? null : 'must be on or off'),
   TWILIO_FROM_NUMBER: (v) => (/^\+\d{8,15}$/.test(v) ? null : 'must look like +15551234567'),
 };
 const LABELS = {
   CALL_WINDOW_START: 'Start hour', CALL_WINDOW_END: 'End hour', CALL_SPACING_SECONDS: 'Seconds between calls',
   MAX_ATTEMPTS: 'Max tries', DEFAULT_COUNTRY_CODE: 'Country code', CALL_DAYS: 'Days', DEFAULT_TIMEZONE: 'Default timezone',
-  TWILIO_FROM_NUMBER: 'Twilio phone number',
+  TWILIO_FROM_NUMBER: 'Twilio phone number', MAX_CALL_SECONDS: 'Max call length', RETRY_NO_ANSWER_HOURS: 'Retry after no answer',
+  RETRY_VOICEMAIL_HOURS: 'Retry after voicemail', AMD_ENABLED: 'Voicemail detection', RECORD_CALLS: 'Record calls',
 };
 
 // Blank secret fields mean "keep the current one"; blank normal fields mean "use the default".

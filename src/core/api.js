@@ -1,6 +1,6 @@
 // Framework-free HTTP handlers for the dashboard API and the agent's tools.
 // req = { method, path, query: {}, body, headers: { cookie, 'x-tool-secret', 'x-requested-with' }, ip }
-// returns { status, json, headers? }
+// returns { status, json, headers? } or, for files, { status, raw: { body, contentType } }
 // ctx = { config, env, store, sendEmail, queue: { poke() } }
 //   env: the raw environment variables (saved dashboard settings are layered on top of them in config)
 import { rowsToLeads, normalizePhone } from './leads.js';
@@ -8,6 +8,7 @@ import { settingsForDashboard, cleanSettingsUpdate } from './settings.js';
 import { placeCall, sendDemoLink, markDoNotCall, providerProblem } from './actions.js';
 import { enqueueLeads, queueState, clearQueue } from './queue.js';
 import { randomToken, secretEqual } from './crypto.js';
+import { fetchRecording } from './twilio.js';
 
 const ok = (json, status = 200, headers) => ({ status, json, headers });
 const EDITABLE = ['business_name', 'contact_name', 'phone', 'email', 'website', 'demo_link', 'category', 'city',
@@ -146,6 +147,7 @@ export async function handleRequest(ctx, req) {
     if (method === 'GET') {
       const lead = await store.getLead(id);
       if (!lead) return ok({ error: 'not found' }, 404);
+      lead.next_call_at = await store.nextCallAt(id);
       const calls = (await store.callsForLead(id))
         .map((c) => ({ ...c, transcript: JSON.parse(c.transcript || '[]'), outcome: JSON.parse(c.outcome || 'null') }));
       return ok({ lead, calls, events: await store.eventsForLead(id) });
@@ -169,6 +171,12 @@ export async function handleRequest(ctx, req) {
       await store.deleteLead(id);
       return ok({ ok: true });
     }
+  }
+
+  if (method === 'GET' && (m = path.match(/^\/api\/calls\/(\d+)\/recording$/))) {
+    const call = await store.getCall(m[1]);
+    if (!call?.recording_sid) return ok({ error: 'no recording for this call' }, 404);
+    return { status: 200, raw: { body: await fetchRecording(config.twilio, call.recording_sid), contentType: 'audio/mpeg' } };
   }
 
   if (method === 'POST' && (m = path.match(/^\/api\/leads\/(\d+)\/call$/))) {
