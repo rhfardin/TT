@@ -92,7 +92,7 @@ test('the follow-up goes once, only to businesses still undecided', async () => 
   assert.equal(await sendDueFollowups(ctx), 0, 'never twice');
 });
 
-test('follow-ups: skipped once the owner handled the lead, given up after 3 failed sends', async () => {
+test('follow-ups: skipped once handled; a failed send is retried later, and given up after 5 tries', async () => {
   const { ctx, store } = await makeCtx({ FOLLOWUP_DAYS: '3', BUSINESS_ADDRESS: 'Rizer Web, 1 Main St, Cheyenne, WY 82001' });
   await store.upsertLeads([
     makeLead({ phone: '+15125550911', business_name: 'Handled', email: 'a@a.test' }),
@@ -104,9 +104,15 @@ test('follow-ups: skipped once the owner handled the lead, given up after 3 fail
   await store.updateLead(2, { status: 'interested', followup_due_at: past });
   let tries = 0;
   ctx.sendEmail = async () => { tries++; throw new Error('mailbox does not exist'); };
-  for (let i = 0; i < 4; i++) await sendDueFollowups(ctx);
-  assert.equal(tries, 3, 'the handled lead is never emailed; the bad address is tried 3 times');
+  await sendDueFollowups(ctx);
+  assert.equal(tries, 1, 'the handled lead is never emailed');
   assert.equal((await store.getLead(1)).followup_sent_at, 'skipped');
+  assert.ok(Date.parse((await store.getLead(2)).followup_due_at) > Date.now() + 50 * 60 * 1000, 'tried again in an hour');
+  for (let i = 0; i < 6; i++) {
+    await store.updateLead(2, { followup_due_at: past }); // as if the wait had passed
+    await sendDueFollowups(ctx);
+  }
+  assert.equal(tries, 5);
   assert.equal((await store.getLead(2)).followup_sent_at, 'failed');
 });
 

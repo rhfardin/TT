@@ -150,8 +150,10 @@ export function cleanSettingsUpdate(body, current = {}) {
   // elsewhere never blocks saving something unrelated.
   const changed = (...keys) => keys.some((k) => k in values);
   const pick = (key, fallback) => (key in values ? values[key] : current[key]) || fallback;
-  if (changed('CALL_WINDOW_START', 'CALL_WINDOW_END')) {
-    if (Number(pick('CALL_WINDOW_START', 9)) >= Number(pick('CALL_WINDOW_END', 17))) errors.push('Start hour must be before end hour');
+  if (changed('CALL_WINDOW_START', 'CALL_WINDOW_END', 'LUNCH_BREAK')) {
+    const [start, end] = [Number(pick('CALL_WINDOW_START', 9)), Number(pick('CALL_WINDOW_END', 17))];
+    if (start >= end) errors.push('Start hour must be before end hour');
+    else if (pick('LUNCH_BREAK') === 'true' && start >= 12 && end <= 13) errors.push('With the lunch break on, a 12 to 1 pm window leaves no time to call');
   }
   if (changed('TRANSFER_ENABLED', 'TRANSFER_PHONE') && pick('TRANSFER_ENABLED') === 'true' && !pick('TRANSFER_PHONE')) {
     errors.push('Add your phone number to turn on live transfer');

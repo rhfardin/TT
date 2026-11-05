@@ -109,3 +109,9 @@ test('a forgotten password: changing ADMIN_PASSWORD lets you back in', async () 
   const b = ctxWith('new-env-password');
   assert.equal((await handleRequest(b, req('/api/login', { password: 'new-env-password' }))).status, 200);
 });
+
+test('lunch break with a 12-1 calling window is refused', async () => {
+  const r = await app.api('PUT', '/api/settings', { CALL_WINDOW_START: '12', CALL_WINDOW_END: '13', LUNCH_BREAK: 'true' });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /no time to call/);
+});

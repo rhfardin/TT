@@ -56,9 +56,12 @@ export async function runDue(ctx, now = new Date()) {
       await store.rescheduleQueueItem(item.id, new Date(now.getTime() + 2 * 60 * 1000).toISOString());
       continue;
     }
-    // They asked us to call back at this time: the max-tries limit doesn't apply.
+    // They asked us to call back at this time: the max-tries limit doesn't apply, and neither do the calling
+    // hours, but only close to that time. Much later (calling was paused, the server was down) it waits
+    // for the normal hours instead of ringing them at night.
     const callback = item.reason === 'callback requested';
-    const check = checkLead(lead && callback ? { ...lead, attempts: 0 } : lead, config.calling, { ignoreWindow: Boolean(item.ignore_window), now });
+    const onTime = now.getTime() - Date.parse(item.not_before) <= 30 * 60 * 1000;
+    const check = checkLead(lead && callback ? { ...lead, attempts: 0 } : lead, config.calling, { ignoreWindow: Boolean(item.ignore_window) && onTime, now });
     if (!check.ok) {
       if (lead && checkLead(lead, config.calling, { ignoreWindow: true }).ok) {
         // Only the hours are wrong: wait for the business's next calling window.
@@ -74,6 +77,13 @@ export async function runDue(ctx, now = new Date()) {
       // A limit was reached meanwhile: keep their place in the queue and wait.
       await store.rescheduleQueueItem(item.id, now.toISOString());
       return { placed: false, waitMs: (await callGate(ctx, now)) ?? 60 * 1000 };
+    }
+    if (r.retryAfterMs) {
+      // Not this business's fault (an outage, or they're on the phone with us): keep their place.
+      await store.rescheduleQueueItem(item.id, new Date(now.getTime() + r.retryAfterMs).toISOString());
+      await store.logEvent(lead.id, 'queue_wait', r.error);
+      if (r.outage) return { placed: false, waitMs: 5 * 60 * 1000 }; // everyone else would fail too
+      continue;
     }
     await store.deleteQueueItem(item.id);
     if (!r.ok) {

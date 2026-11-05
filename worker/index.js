@@ -72,11 +72,14 @@ export default {
 
   // Cron: housekeeping, and a nudge to the queue in case an alarm was missed.
   async scheduled(event, env, execution) {
+    const dialer = env.DIALER.get(env.DIALER.idFromName('main'));
     try {
-      const ctx = await makeCtx(env, '', (p) => execution.waitUntil(p));
+      // The site's address (for links in emails) is learned from the dashboard, like the queue does.
+      const publicUrl = env.PUBLIC_URL || (await dialer.publicUrl()) || '';
+      const ctx = await makeCtx(env, publicUrl, (p) => execution.waitUntil(p));
       await housekeeping(ctx);
     } finally {
-      await env.DIALER.get(env.DIALER.idFromName('main')).poke();
+      await dialer.poke();
     }
   },
 };
@@ -204,11 +207,18 @@ export class CallSession extends DurableObject {
 export class Dialer extends DurableObject {
   async poke(publicUrl) {
     if (publicUrl) await this.ctx.storage.put('publicUrl', publicUrl);
+    // Remembered, so a poke during a run isn't overwritten by that run's own next alarm.
+    await this.ctx.storage.put('poked', true);
     const alarm = await this.ctx.storage.getAlarm();
     if (alarm === null || alarm > Date.now() + 1000) await this.ctx.storage.setAlarm(Date.now() + 200);
   }
 
+  async publicUrl() {
+    return (await this.ctx.storage.get('publicUrl')) || null;
+  }
+
   async alarm() {
+    await this.ctx.storage.delete('poked');
     let wait = 60 * 1000;
     try {
       // Calls need the site's real address for Twilio's callbacks; it's learned from the dashboard.
@@ -219,6 +229,7 @@ export class Dialer extends DurableObject {
     } catch (err) {
       console.error('queue error', err);
     }
+    if (await this.ctx.storage.get('poked')) wait = 200; // something changed while this run was going
     if (wait !== null) await this.ctx.storage.setAlarm(Date.now() + wait);
   }
 }

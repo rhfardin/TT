@@ -191,3 +191,35 @@ test('no call-back is booked for someone who asked not to be called, or who book
   await recordCallResult(ctx, c2, { outcome: 'meeting_booked', transcript, collected: { callback_at: `${day} 11:00` } });
   assert.equal((await db.get('SELECT COUNT(*) AS n FROM queue_items')).n, 0);
 });
+
+test('a Twilio outage keeps the business in the queue, untouched', async () => {
+  const { ctx, db, store } = await setup({}, [lead(), lead({ phone: '+15125550101', business_name: 'Second' })]);
+  await enqueueLeads(ctx, [1, 2]);
+  globalThis.fetch = async () => new Response(JSON.stringify({ message: 'Service unavailable' }), { status: 503 });
+  const r = await runDue(ctx);
+  assert.equal(r.placed, false);
+  assert.equal(r.waitMs, 5 * 60 * 1000);
+  const l = await store.getLead(1);
+  assert.equal(l.status, 'new');
+  assert.equal(l.attempts, 0);
+  assert.equal((await db.get('SELECT COUNT(*) AS n FROM queue_items')).n, 2, 'nobody dropped');
+  assert.equal((await store.callsLast24h()).count, 0, "doesn't count against the daily limit");
+  // An invalid number is this business's problem: it's dropped as before.
+  globalThis.fetch = async () => new Response(JSON.stringify({ message: 'Invalid To number' }), { status: 400 });
+  await db.run('UPDATE queue_items SET not_before = ?', new Date(Date.now() - 1000).toISOString());
+  await runDue(ctx);
+  assert.equal((await store.getLead(1)).status, 'failed');
+});
+
+test('a call-back that is hours late waits for calling hours instead of ringing at night', async () => {
+  const { ctx, db, store } = await setup(HOURS);
+  await store.scheduleCallback(1, '2026-11-03T21:00:00.000Z'); // Tue 3 pm in Austin (512)
+  const lateNight = new Date('2026-11-04T05:30:00Z'); // 11:30 pm in Austin
+  const r = await runDue(ctx, lateNight);
+  assert.equal(r.placed, false);
+  assert.equal(calls.length, 0);
+  assert.equal((await db.get('SELECT not_before FROM queue_items')).not_before, '2026-11-04T15:00:00.000Z', 'Wednesday 9 am');
+  // ...and a retry never replaces a call-back.
+  await store.scheduleLead(1, '2026-11-10T14:00:00.000Z', 'retry after voicemail');
+  assert.equal((await db.get('SELECT reason FROM queue_items')).reason, 'callback requested');
+});

@@ -12,7 +12,7 @@ async function post(tw, path, params) {
     throw new Error(`Could not reach Twilio (${err.message})`);
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.message || `Twilio HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(body.message || `Twilio HTTP ${res.status}`), { status: res.status });
   return body;
 }
 
@@ -23,7 +23,7 @@ async function get(tw, path) {
     throw new Error(`Could not reach Twilio (${err.message})`);
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.message || `Twilio HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(body.message || `Twilio HTTP ${res.status}`), { status: res.status });
   return body;
 }
 

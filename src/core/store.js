@@ -148,7 +148,8 @@ export function createStore(db) {
     scheduleLead: (leadId, notBeforeIso, reason, campaignId = null) =>
       db.run(`INSERT INTO queue_items (lead_id, not_before, reason, campaign_id) VALUES (?, ?, ?, ?)
               ON CONFLICT(lead_id) DO UPDATE SET not_before = excluded.not_before, reason = excluded.reason, claimed_at = NULL,
-                ignore_window = 0, campaign_id = excluded.campaign_id`,
+                ignore_window = 0, campaign_id = excluded.campaign_id
+              WHERE queue_items.reason IS NOT 'callback requested'`, // a call-back they asked for is never replaced by a retry
       Number(leadId), notBeforeIso, reason, campaignId),
     // A time the business asked us to call back: kept exactly (not moved into the calling window), in no
     // campaign (so pausing one doesn't hold it up), and created fresh so it outlives the call it was set on.
@@ -289,9 +290,11 @@ export function createStore(db) {
     // Estimated spend of every call in the last 24 hours, in cents (test calls cost money too).
     spendLast24h: async () => (await db.get('SELECT COALESCE(SUM(cost_cents), 0) AS c FROM calls WHERE created_at >= datetime(?)',
       new Date(Date.now() - 864e5).toISOString())).c,
+    // Calls that never went out (Twilio was down: failed with no call id) don't count.
     async callsLast24h() {
       const r = await db.get(`SELECT COUNT(*) AS n, MIN(c.created_at) AS oldest FROM calls c JOIN leads l ON l.id = c.lead_id
-                              WHERE c.direction = 'outbound' AND l.is_test = 0 AND c.created_at >= datetime(?)`,
+                              WHERE c.direction = 'outbound' AND l.is_test = 0 AND c.created_at >= datetime(?)
+                                AND NOT (c.status = 'failed' AND c.call_sid IS NULL)`,
       new Date(Date.now() - 864e5).toISOString());
       return { count: r.n, oldest: r.oldest };
     },

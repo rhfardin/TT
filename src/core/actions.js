@@ -44,7 +44,7 @@ async function startElevenLabsCall(config, lead) {
   const body = await res.json().catch(() => ({}));
   if (!res.ok || body.success === false) {
     const d = body?.detail;
-    throw new Error((typeof d === 'object' ? d?.message || JSON.stringify(d) : d) || body?.message || `HTTP ${res.status}`);
+    throw Object.assign(new Error((typeof d === 'object' ? d?.message || JSON.stringify(d) : d) || body?.message || `HTTP ${res.status}`), { status: res.status });
   }
   return { conversationId: body.conversation_id ?? null, callSid: body.callSid ?? null };
 }
@@ -61,7 +61,7 @@ export async function placeCall(ctx, leadId, opts = {}) {
     await store.updateLead(lead.id, { status: 'dnc' });
     return { ok: false, error: 'this number is on your do-not-call list' };
   }
-  if (await store.hasLiveInboundCall(lead.id)) return { ok: false, error: 'they are on a call with us right now' };
+  if (await store.hasLiveInboundCall(lead.id)) return { ok: false, error: 'they are on a call with us right now', retryAfterMs: 2 * 60 * 1000 };
   if (config.calling.paused && !lead.is_test) return { ok: false, error: 'calling is paused (turn it back on with Resume)', limited: true };
   const limit = config.calling.dailySpendLimitCents;
   if (limit && !lead.is_test && (await store.spendLast24h()) >= limit) {
@@ -92,8 +92,14 @@ export async function placeCall(ctx, leadId, opts = {}) {
     return { ok: true, callId };
   } catch (err) {
     await store.updateCall(callId, { status: 'failed', error: err.message });
-    await store.updateLead(lead.id, { status: 'failed' });
     await store.logEvent(lead.id, 'call_failed', err.message);
+    // Twilio/ElevenLabs down, overloaded or unreachable: nothing is wrong with this business, so it keeps
+    // its status and tries, and the queue tries again later. Other errors (e.g. an invalid number) stick.
+    if (!err.status || err.status === 429 || err.status >= 500) {
+      await store.updateLead(lead.id, { status: lead.status, attempts: lead.attempts });
+      return { ok: false, error: err.message, retryAfterMs: 20 * 60 * 1000, outage: true };
+    }
+    await store.updateLead(lead.id, { status: 'failed' });
     return { ok: false, error: err.message };
   }
 }

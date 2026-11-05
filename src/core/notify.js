@@ -182,8 +182,12 @@ export async function sendDueFollowups(ctx) {
       sent++;
     } catch (err) {
       await store.logEvent(lead.id, 'followup_failed', err.message);
-      // Give up after 3 tries so one bad address can't hold up everyone else's follow-up.
-      if ((await store.countEvents(lead.id, 'followup_failed')) >= 3) await store.updateLead(lead.id, { followup_sent_at: 'failed' });
+      // Try again later, waiting longer each time (an email outage passes); give up after 5 tries so one
+      // bad address can't hold up everyone else's follow-up.
+      const tries = await store.countEvents(lead.id, 'followup_failed');
+      await store.updateLead(lead.id, tries >= 5
+        ? { followup_sent_at: 'failed' }
+        : { followup_due_at: new Date(Date.now() + tries * 3600 * 1000).toISOString() });
     }
   }
   return sent;

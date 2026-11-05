@@ -41,3 +41,5 @@ The queue (queue.js, `runDue`) places one call at a time from `queue_items`.
   a transfer, calling the Twilio number back, a Cal.com booking).
 - `public/index.html` loads SheetJS from cdn.sheetjs.com without an integrity hash.
 - Twilio voicemail detection can mistake some phone menus for answering machines.
+- Results "by day" groups calls by UTC date (`date(c.created_at)` in `store.analytics`), so late-evening US calls show on the next day.
+- Cloudflare housekeeping is near the 50-queries-per-run limit of the free plan; keep new work out of it or split it.
